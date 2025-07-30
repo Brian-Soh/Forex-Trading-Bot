@@ -45,11 +45,18 @@ class ForexBot():
         #Allow server to connect
         time.sleep(1)
 
+    def connect(self):
+        self.ib.connect("127.0.0.1", 7497, 1)
+        self.ib.run()
+    
+    def disconnect(self):
+        self.ib.disconnect()
+
     def get_market_data(self):        
         #Define contract type
         contract = Contract()
-        symbol = input("Enter the base currency you would like to trade: ").upper()
-        currency = input("Enter the quote currency you would like to trade: ").upper()
+        symbol = "EUR"
+        currency = "USD"
         contract.symbol = symbol
         contract.currency = currency
         contract.secType = "CASH"
@@ -77,6 +84,9 @@ class ForexBot():
         print('Stopping market data stream for ' + symbol + "/" + currency + ". \n")
         self.stop_market_data(reqId)
 
+    def stop_market_data(self, reqId):
+        self.ib.cancelMktData(reqId)
+
     def place_buy_order(self, quantity=1):
         #Define order type
         order = Order()
@@ -86,8 +96,8 @@ class ForexBot():
 
         #Define contract type
         contract = Contract()
-        symbol = input("Enter the base currency you would like to trade: ").upper()
-        currency = input("Enter the quote currency you would like to trade: ").upper()
+        symbol = "EUR"
+        currency = "USD"
         contract.symbol = symbol
         contract.currency = currency
         contract.secType = "CASH"
@@ -106,18 +116,9 @@ class ForexBot():
         else:
             print("Timed out waiting for order fill")
 
-    def stop_market_data(self, reqId):
-        self.ib.cancelMktData(reqId)
-
-    def connect(self):
-        self.ib.connect("127.0.0.1", 7497, 1)
-        self.ib.run()
-    
-    def disconnect(self):
-        self.ib.disconnect()
 
 bot = ForexBot()
 print("Get real time market data: \n")
 bot.get_market_data()
-print("Place an order: \n")
-bot.place_buy_order(10)
+# print("Place an order: \n")
+# bot.place_buy_order(10)
