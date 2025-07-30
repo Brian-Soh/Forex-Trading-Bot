@@ -8,10 +8,15 @@ from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
 #To request data
 from ibapi.contract import Contract
+#To submit orders
+from ibapi.order import *
 
+#Class for Interactive Brokers Connection
+#Must override function names from EWrapper to process incoming data
 class IBapi(EWrapper, EClient):
     def __init__(self):
         EClient.__init__(self, self)
+        self.order_filled_event = threading.Event()
 
     def tickPrice(self, reqId, tickType, price, attrib):
         #tickType 1 gives the bid price
@@ -20,10 +25,18 @@ class IBapi(EWrapper, EClient):
         #tickType 2 gives the ask price
         if tickType == 2:
             print('The current ask price is: ', price)
+    
+    def orderStatus(self, orderId, status, filled, remaining, avgFillPrice, permId,
+                    parentId, lastFillPrice, clientId, whyHeld, mktCapPrice):
+        print(f"Order {orderId}: {status}, Filled: {filled}, Remaining: {remaining}")
+        if status == "Filled":
+            self.order_filled_event.set()
 
 class ForexBot():
     ib = None
     reqId = 1
+    orderId = 1
+
     def __init__(self):
         #Connect to IB on init
         self.ib = IBapi()
@@ -33,13 +46,13 @@ class ForexBot():
         time.sleep(1)
 
     def get_market_data(self):        
-        #Create IB Contract Object
+        #Define contract type
         contract = Contract()
-        symbol = input("Enter the base currency you want to trade: ").upper()
-        currency = input("Enter the quote currency you want to trade: ").upper()
+        symbol = input("Enter the base currency you would like to trade: ").upper()
+        currency = input("Enter the quote currency you would like to trade: ").upper()
         contract.symbol = symbol
-        contract.secType = "CASH"
         contract.currency = currency
+        contract.secType = "CASH"
         contract.exchange = "IDEALPRO"
 
         #Assign reqId and increment for future requests
@@ -64,6 +77,34 @@ class ForexBot():
         print('Stopping market data stream for ' + symbol + "/" + currency + ". \n")
         self.stop_market_data(reqId)
 
+    def place_buy_order(self, quantity=1):
+        #Define order type
+        order = Order()
+        order.orderType = "MKT" # or LMT
+        order.action = "BUY"
+        order.totalQuantity = quantity
+
+        #Define contract type
+        contract = Contract()
+        symbol = input("Enter the base currency you would like to trade: ").upper()
+        currency = input("Enter the quote currency you would like to trade: ").upper()
+        contract.symbol = symbol
+        contract.currency = currency
+        contract.secType = "CASH"
+        contract.exchange = "IDEALPRO"
+
+        #Assign orderId and increment for future requests
+        orderId = self.orderId
+        self.orderId += 1
+
+        self.ib.placeOrder(orderId, contract, order)
+
+        print("Waiting for order to fill...")
+        self.ib.order_filled_event.wait(timeout=30)
+        if self.ib.order_filled_event.is_set():
+            print("Order was filled")
+        else:
+            print("Timed out waiting for order fill")
 
     def stop_market_data(self, reqId):
         self.ib.cancelMktData(reqId)
@@ -76,5 +117,7 @@ class ForexBot():
         self.ib.disconnect()
 
 bot = ForexBot()
+print("Get real time market data: \n")
 bot.get_market_data()
-bot.disconnect()
+print("Place an order: \n")
+bot.place_buy_order(10)
