@@ -1,2 +1,3 @@
 # Forex-Trading-Bot
-A forex trading bot using Interactive Brokers' Python API
+
+In this project I plan on creating a Forex Trading Bot by using the Interactive Brokers (IB) Python API to stream real time market data and execute orders on a simulated trading account through their Trader Work Station (TWS). I hope to eventually deploy this bot on an AWS EC2 instance and use IB's headless application, IB Gateway, which allows the bot to access my account with less computing power compared to the TWS. I originally planned on creating a bot to trade stocks during market hours but after testing out the data streaming feature of the IB API, I realized that it would also limit the hours in which I can test my bot, hence I decided to leverage the 24/7 market hours of Forex. 
