@@ -14,23 +14,17 @@ from ibapi.order import *
 #Class for Interactive Brokers Connection
 #Must override function names from EWrapper to process incoming data
 class IBapi(EWrapper, EClient):
-    def __init__(self):
+    def __init__(self, bot_ref):
         EClient.__init__(self, self)
-        self.order_filled_event = threading.Event()
+        self.bot = bot_ref
 
     def tickPrice(self, reqId, tickType, price, attrib):
-        #tickType 1 gives the bid price
-        if tickType == 1:
-            print('The current bid price is: ', price)
-        #tickType 2 gives the ask price
-        if tickType == 2:
-            print('The current ask price is: ', price)
-    
+        self.bot.tickPrice(reqId, tickType, price, attrib)
+
     def orderStatus(self, orderId, status, filled, remaining, avgFillPrice, permId,
                     parentId, lastFillPrice, clientId, whyHeld, mktCapPrice):
-        print(f"Order {orderId}: {status}, Filled: {filled}, Remaining: {remaining}")
-        if status == "Filled":
-            self.order_filled_event.set()
+        self.bot.orderStatus(self, orderId, status, filled, remaining, avgFillPrice, permId,
+                    parentId, lastFillPrice, clientId, whyHeld, mktCapPrice)
 
 class ForexBot():
     ib = None
@@ -38,8 +32,12 @@ class ForexBot():
     orderId = 1
 
     def __init__(self):
+        #Define event threads
+        self.order_filled_event = threading.Event()
+
         #Connect to IB on init
-        self.ib = IBapi()
+        self.ib = IBapi(self)
+        
         ib_thread = threading.Thread(target=self.connect, daemon=True)
         ib_thread.start()
         #Allow server to connect
@@ -83,6 +81,14 @@ class ForexBot():
         input("Press any key to stop market data stream \n")
         print('Stopping market data stream for ' + symbol + "/" + currency + ". \n")
         self.stop_market_data(reqId)
+    
+    def tickPrice(self, reqId, tickType, price, attrib):
+        #tickType 1 gives the bid price
+        if tickType == 1:
+            print('The current bid price is: ', price)
+        #tickType 2 gives the ask price
+        if tickType == 2:
+            print('The current ask price is: ', price)
 
     def stop_market_data(self, reqId):
         self.ib.cancelMktData(reqId)
@@ -110,15 +116,22 @@ class ForexBot():
         self.ib.placeOrder(orderId, contract, order)
 
         print("Waiting for order to fill...")
-        self.ib.order_filled_event.wait(timeout=30)
-        if self.ib.order_filled_event.is_set():
+        self.order_filled_event.wait(timeout=30)
+        if self.order_filled_event.is_set():
+            self.order_filled_event.clear()
             print("Order was filled")
         else:
             print("Timed out waiting for order fill")
+
+    def orderStatus(self, orderId, status, filled, remaining, avgFillPrice, permId,
+                    parentId, lastFillPrice, clientId, whyHeld, mktCapPrice):
+        print(f"Order {orderId}: {status}, Filled: {filled}, Remaining: {remaining}")
+        if status == "Filled":
+            self.order_filled_event.set()
 
 
 bot = ForexBot()
 print("Get real time market data: \n")
 bot.get_market_data()
-# print("Place an order: \n")
-# bot.place_buy_order(10)
+print("Place an order: \n")
+bot.place_buy_order(10)
