@@ -33,6 +33,10 @@ class ForexBot():
     ib = None
     reqId = 1
     orderId = 1
+    symbol = "EUR"
+    currency = "USD"
+    ticker = "EUR/USD"
+    contract = Contract()
 
     def __init__(self):
         #Define event threads
@@ -49,6 +53,12 @@ class ForexBot():
         if not self.connected_event.is_set():
             print("Timed out waiting to connect")
 
+        #Define contract
+        self.contract.symbol = self.symbol
+        self.contract.currency = self.currency
+        self.contract.secType = "CASH"
+        self.contract.exchange = "IDEALPRO"
+
     def connect(self):
         self.ib.connect("127.0.0.1", 7497, 1)
         self.ib.run()
@@ -61,15 +71,6 @@ class ForexBot():
         self.ib.disconnect()
 
     def get_market_data(self):        
-        #Define contract type
-        contract = Contract()
-        symbol = "EUR"
-        currency = "USD"
-        contract.symbol = symbol
-        contract.currency = currency
-        contract.secType = "CASH"
-        contract.exchange = "IDEALPRO"
-
         #Assign reqId and increment for future requests
         reqId = self.reqId
         self.reqId += 1
@@ -77,11 +78,11 @@ class ForexBot():
         #Set delayed market data (3) or real time (1)
         self.ib.reqMarketDataType(3)
 
-        print("Displaying market data stream for " + symbol + "/" + currency + ": \n")
+        print("Displaying market data stream for " + self.ticker + ": \n")
         #Request market data
         self.ib.reqMktData(
             reqId=reqId,
-            contract=contract,
+            contract=self.contract,
             genericTickList="",
             snapshot=False,
             regulatorySnapshot=False, #False = streaming, True = single
@@ -89,7 +90,7 @@ class ForexBot():
         )
 
         input("Press any key to stop market data stream \n")
-        print('Stopping market data stream for ' + symbol + "/" + currency + ". \n")
+        print('Stopping market data stream for ' + self.ticker + ". \n")
         self.stop_market_data(reqId)
     
     def tick_price(self, reqId, tickType, price, attrib):
@@ -110,20 +111,11 @@ class ForexBot():
         order.action = "BUY"
         order.totalQuantity = quantity
 
-        #Define contract type
-        contract = Contract()
-        symbol = "EUR"
-        currency = "USD"
-        contract.symbol = symbol
-        contract.currency = currency
-        contract.secType = "CASH"
-        contract.exchange = "IDEALPRO"
-
         #Assign orderId and increment for future requests
         orderId = self.orderId
         self.orderId += 1
 
-        self.ib.placeOrder(orderId, contract, order)
+        self.ib.placeOrder(orderId, self.contract, order)
 
         print("Waiting for order to fill...")
         self.order_filled_event.wait(timeout=30)
