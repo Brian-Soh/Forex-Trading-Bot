@@ -18,12 +18,15 @@ class IBapi(EWrapper, EClient):
         EClient.__init__(self, self)
         self.bot = bot_ref
 
+    def nextValidId(self, orderId):
+        self.bot.confirm_connection(orderId)
+
     def tickPrice(self, reqId, tickType, price, attrib):
-        self.bot.tickPrice(reqId, tickType, price, attrib)
+        self.bot.tick_price(reqId, tickType, price, attrib)
 
     def orderStatus(self, orderId, status, filled, remaining, avgFillPrice, permId,
                     parentId, lastFillPrice, clientId, whyHeld, mktCapPrice):
-        self.bot.orderStatus(self, orderId, status, filled, remaining, avgFillPrice, permId,
+        self.bot.order_status(orderId, status, filled, remaining, avgFillPrice, permId,
                     parentId, lastFillPrice, clientId, whyHeld, mktCapPrice)
 
 class ForexBot():
@@ -33,6 +36,7 @@ class ForexBot():
 
     def __init__(self):
         #Define event threads
+        self.connected_event = threading.Event()
         self.order_filled_event = threading.Event()
 
         #Connect to IB on init
@@ -40,13 +44,19 @@ class ForexBot():
         
         ib_thread = threading.Thread(target=self.connect, daemon=True)
         ib_thread.start()
-        #Allow server to connect
-        time.sleep(1)
+        #Wait for server to connect
+        self.connected_event.wait(timeout=10)
+        if not self.connected_event.is_set():
+            print("Timed out waiting to connect")
 
     def connect(self):
         self.ib.connect("127.0.0.1", 7497, 1)
         self.ib.run()
     
+    def confirm_connection(self, orderId):
+        self.orderId = orderId
+        self.connected_event.set()
+
     def disconnect(self):
         self.ib.disconnect()
 
@@ -82,7 +92,7 @@ class ForexBot():
         print('Stopping market data stream for ' + symbol + "/" + currency + ". \n")
         self.stop_market_data(reqId)
     
-    def tickPrice(self, reqId, tickType, price, attrib):
+    def tick_price(self, reqId, tickType, price, attrib):
         #tickType 1 gives the bid price
         if tickType == 1:
             print('The current bid price is: ', price)
@@ -123,7 +133,7 @@ class ForexBot():
         else:
             print("Timed out waiting for order fill")
 
-    def orderStatus(self, orderId, status, filled, remaining, avgFillPrice, permId,
+    def order_status(self, orderId, status, filled, remaining, avgFillPrice, permId,
                     parentId, lastFillPrice, clientId, whyHeld, mktCapPrice):
         print(f"Order {orderId}: {status}, Filled: {filled}, Remaining: {remaining}")
         if status == "Filled":
