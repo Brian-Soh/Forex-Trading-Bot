@@ -1,6 +1,9 @@
 import ibapi
 import threading
 import time
+import pytz
+import pandas as pd
+from datetime import datetime as dt, timedelta
 
 #Handles outgoing data
 from ibapi.client import EClient
@@ -29,14 +32,15 @@ class IBapi(EWrapper, EClient):
         self.bot.order_status(orderId, status, filled, remaining, avgFillPrice, permId,
                     parentId, lastFillPrice, clientId, whyHeld, mktCapPrice)
 
+    def historicalTicksBidAsk(self, reqId, ticks, done):
+        self.bot.historical_ticks_bid_ask(reqId, ticks, done)
+
 class ForexBot():
-    ib = None
     reqId = 1
     orderId = 1
     symbol = "EUR"
     currency = "USD"
     ticker = "EUR/USD"
-    contract = Contract()
 
     def __init__(self):
         #Define event threads
@@ -50,14 +54,19 @@ class ForexBot():
         ib_thread.start()
         #Wait for server to connect
         self.connected_event.wait(timeout=10)
+    
         if not self.connected_event.is_set():
             print("Timed out waiting to connect")
 
         #Define contract
+        self.contract = Contract()
         self.contract.symbol = self.symbol
         self.contract.currency = self.currency
         self.contract.secType = "CASH"
         self.contract.exchange = "IDEALPRO"
+
+        #Note start time
+        self.startTime = dt.now().astimezone(pytz.utc)
 
     def connect(self):
         self.ib.connect("127.0.0.1", 7497, 1)
@@ -70,6 +79,27 @@ class ForexBot():
     def disconnect(self):
         self.ib.disconnect()
 
+    #get historical data leading up to the start time
+    def get_historical_data(self):
+        endTime = self.startTime.strftime("%Y%m%d-%H:%M:%S")
+        self.ib.reqHistoricalTicks(self.reqId, self.contract,  "", endTime, 20, "BID_ASK", 1, True, [])
+
+    def historical_ticks_bid_ask(self, reqId, ticks, done):
+        data = [{
+            "time": pd.to_datetime(t.time, unit="s"),
+            "bid": t.priceBid,
+            "ask": t.priceAsk,
+            "bidSize": t.sizeBid,
+            "askSize": t.sizeAsk
+        } for t in ticks]
+
+        self.historicalData = pd.DataFrame(data)
+        self.historicalData.set_index("time", inplace=True)
+
+        print(self.historicalData)
+        input("Press any key to continue \n")
+
+    
     def get_market_data(self):        
         #Assign reqId and increment for future requests
         reqId = self.reqId
@@ -133,6 +163,8 @@ class ForexBot():
 
 
 bot = ForexBot()
+print("Get historical data: \n")
+bot.get_historical_data()
 print("Get real time market data: \n")
 bot.get_market_data()
 print("Place an order: \n")
