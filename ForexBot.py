@@ -2,6 +2,7 @@ import ibapi
 import threading
 import time
 import pytz
+import csv
 import pandas as pd
 from datetime import datetime as dt, timedelta
 
@@ -175,6 +176,28 @@ class ForexBot():
         if status == "Filled":
             self.order_filled_event.set()
 
+    def buy_for_day(self, quantity):
+        iterations = 24
+        interval = 1 #every hour
+        startTime = dt.now().astimezone(pytz.utc)
+        timestamp = startTime.strftime("%Y%m%d-%H:%M:%S")
+        fileName = f"OrderLog_{timestamp}.csv"
+        with open(fileName, "a", newline="") as log:
+            writer = csv.writer(log)
+            writer.writerow(["Time", "Action", "Symbol", "Quantity"])
+
+            for i in range(iterations):
+                orderTime = dt.now().astimezone(pytz.utc).strftime("%Y%m%d-%H:%M:%S")
+                self.place_buy_order(quantity)
+
+                writer.writerow([orderTime,"BUY", self.ticker, quantity])
+                log.flush()
+
+                nextTime = startTime + timedelta(hours = (i + 1) * interval)
+                sleepTime = (nextTime - dt.now().astimezone(pytz.utc)).total_seconds()
+                if sleepTime > 0:
+                    time.sleep(sleepTime)
+
 bot = ForexBot()
 print("Get historical data: \n")
 bot.get_historical_data()
@@ -182,3 +205,5 @@ print("Get real time market data: \n")
 bot.get_market_data()
 print("Place an order: \n")
 bot.place_buy_order(10)
+print("Running script for 24 hours")
+bot.buy_for_day(1)
