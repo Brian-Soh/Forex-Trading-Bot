@@ -13,6 +13,8 @@ from ibapi.wrapper import EWrapper
 from ibapi.contract import Contract
 #To submit orders
 from ibapi.order import *
+#To cancel orders
+from ibapi.order_cancel import OrderCancel
 
 #Class for Interactive Brokers Connection
 #Must override function names from EWrapper to process incoming data
@@ -45,6 +47,7 @@ class ForexBot():
     def __init__(self):
         #Define event threads
         self.connected_event = threading.Event()
+        self.data_received_event = threading.Event()
         self.order_filled_event = threading.Event()
 
         #Connect to IB on init
@@ -57,6 +60,7 @@ class ForexBot():
     
         if not self.connected_event.is_set():
             print("Timed out waiting to connect")
+            exit()
 
         #Define contract
         self.contract = Contract()
@@ -79,14 +83,22 @@ class ForexBot():
     def disconnect(self):
         self.ib.disconnect()
 
-    #get historical data leading up to the start time
+    #Get historical data leading up to the start time
     def get_historical_data(self):
         endTime = self.startTime.strftime("%Y%m%d-%H:%M:%S")
         self.ib.reqHistoricalTicks(self.reqId, self.contract,  "", endTime, 20, "BID_ASK", 1, True, [])
+        self.data_received_event.wait(timeout=10)
+        
+        if not self.data_received_event.is_set():
+            print("Timed out waiting for data")
+            exit()
+            
+        self.data_received_event.clear()
+        input("Press any key to continue \n")
 
     def historical_ticks_bid_ask(self, reqId, ticks, done):
         data = [{
-            "time": pd.to_datetime(t.time, unit="s"),
+            "time": pd.to_datetime(t.time, unit="s", utc=True).strftime("%Y%m%d-%H:%M:%S"),
             "bid": t.priceBid,
             "ask": t.priceAsk,
             "bidSize": t.sizeBid,
@@ -97,7 +109,7 @@ class ForexBot():
         self.historicalData.set_index("time", inplace=True)
 
         print(self.historicalData)
-        input("Press any key to continue \n")
+        self.data_received_event.set()
 
     
     def get_market_data(self):        
@@ -148,19 +160,20 @@ class ForexBot():
         self.ib.placeOrder(orderId, self.contract, order)
 
         print("Waiting for order to fill...")
-        self.order_filled_event.wait(timeout=30)
+        self.order_filled_event.wait(timeout=10)
+
         if self.order_filled_event.is_set():
             self.order_filled_event.clear()
             print("Order was filled")
         else:
             print("Timed out waiting for order fill")
+            self.ib.cancelOrder(orderId, OrderCancel())
 
     def order_status(self, orderId, status, filled, remaining, avgFillPrice, permId,
                     parentId, lastFillPrice, clientId, whyHeld, mktCapPrice):
         print(f"Order {orderId}: {status}, Filled: {filled}, Remaining: {remaining}")
         if status == "Filled":
             self.order_filled_event.set()
-
 
 bot = ForexBot()
 print("Get historical data: \n")
