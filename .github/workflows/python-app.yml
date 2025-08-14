@@ -1,0 +1,16 @@
+# This workflow will install Python dependencies, run tests and lint with a single version of Python
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
+
+name: Deploy to EC2 (production)
+
+on:
+  push:
+    branches: [ "production" ]
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Updates:"
+        required: false
+        default: "manual"
+  schedule:
+    - cron: "00 00 * * *"
