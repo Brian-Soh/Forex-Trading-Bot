@@ -177,9 +177,19 @@ class ForexBot():
             self.order_filled_event.set()
 
     def buy_for_day(self, quantity):
-        iterations = 24
-        interval = 1 #every hour
-        startTime = dt.now().astimezone(pytz.utc)
+        iterations = 10 #Run from 11am EST - 3:30pm EST
+        interval = 30 #Every half hour
+        runTime = dt.now().astimezone(pytz.utc)
+        endTime = runTime.replace(hour=19, minute=30, second=0, microsecond=0)
+
+        #Sleep until 11am EST/3pm UTC before starting
+        startTime = runTime.replace(hour=15, minute=0, second=0, microsecond=0)
+        waitTime = (startTime - runTime).total_seconds()
+        print(waitTime)
+        if waitTime > 0:
+            time.sleep(waitTime)
+
+        #Create order log file
         timestamp = startTime.strftime("%Y%m%d-%H:%M:%S")
         fileName = f"OrderLog_{timestamp}.csv"
         with open(fileName, "a", newline="") as log:
@@ -188,16 +198,19 @@ class ForexBot():
 
             for i in range(iterations):
                 orderTime = dt.now().astimezone(pytz.utc).strftime("%Y%m%d-%H:%M:%S")
+                if (orderTime - endTime).total_seconds() < 0:
+                    print("End time reached")
+                    exit()
                 self.place_buy_order(quantity)
 
                 writer.writerow([orderTime,"BUY", self.ticker, quantity])
                 log.flush()
 
-                nextTime = startTime + timedelta(hours = (i + 1) * interval)
+                nextTime = startTime + timedelta(minutes = (i + 1) * interval)
                 sleepTime = (nextTime - dt.now().astimezone(pytz.utc)).total_seconds()
                 if sleepTime > 0:
                     time.sleep(sleepTime)
-
+        
 bot = ForexBot()
 print("Get historical data: \n")
 bot.get_historical_data()
