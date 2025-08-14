@@ -1,9 +1,9 @@
 #!/bin/bash
 
-PIDS=$(ps aux | grep -i "ibgateway" | grep -v grep | awk '{print $2}')
-if [ -n "$PIDS" ]; then
-    echo "Killing IB Gateway process: $PIDS"
-    kill -9 $PIDS
+IB_PIDS=$(ps aux | grep -i "ibgateway" | grep -v grep | awk '{print $2}')
+if [ -n "$IB_PIDS" ]; then
+    echo "Killing IB Gateway process: $IB_PIDS"
+    kill -9 $IB_PIDS
 else
     echo "No IB Gateway process found."
 fi
