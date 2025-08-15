@@ -1,0 +1,65 @@
+name: Deploy to EC2 (production)
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/production'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout production branch
+        uses: actions/checkout@v4
+        with:
+          ref: production
+          fetch-depth: 0
+
+      - name: Start SSH agent and add key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.EC2_SSH_KEY }}
+
+      - name: Trust EC2 host
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy to EC2
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          REPO_PATH: /home/ubuntu/Forex-Trading-Bot
+          REPO_URL: git@github.com:Brian-Soh/Forex-Trading-Bot.git
+        run: |
+          set -euo pipefail
+
+          ssh -o StrictHostKeyChecking=yes ubuntu@"$EC2_HOST" bash <<'EOSSH'
+          set -euo pipefail
+
+          REPO_PATH="/home/ubuntu/Forex-Trading-Bot"
+          REPO_URL="git@github.com:Brian-Soh/Forex-Trading-Bot.git"
+
+          # Ensure git and python exist
+          if ! command -v git >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y git python3 python3-pip
+          fi
+
+          # Clone if missing
+          if [ ! -d "$REPO_PATH/.git" ]; then
+            mkdir -p "$REPO_PATH"
+            git clone --branch production --single-branch "$REPO_URL" "$REPO_PATH"
+          fi
+
+          cd "$REPO_PATH"
+          git fetch --all
+          git reset --hard origin/production
+
+          # Install/upgrade deps
+          /usr/bin/pip3 install --upgrade pip
+          /usr/bin/pip3 install -r requirements.txt
+
+          echo "Deployed $(git rev-parse --short HEAD) at $(date -Is)"
+          EOSSH

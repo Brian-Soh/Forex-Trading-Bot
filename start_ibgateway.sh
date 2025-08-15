@@ -18,4 +18,5 @@ else
   export DISPLAY=:$DISPLAY_NUM
 fi
 
+echo "Running IB Gateway"
 /opt/ibc/gatewaystart.sh &
