@@ -38,6 +38,12 @@ class IBapi(EWrapper, EClient):
     def historicalTicksBidAsk(self, reqId, ticks, done):
         self.bot.historical_ticks_bid_ask(reqId, ticks, done)
 
+    def openOrder(self, orderId, contract, order, orderState):
+        self.bot.record_open_order(orderId, contract, order, orderState)
+
+    def openOrderEnd(self):
+        self.bot.open_orders_queried()
+
 class ForexBot():
     reqId = 1
     orderId = 1
@@ -72,6 +78,8 @@ class ForexBot():
 
         #Note start time
         self.startTime = dt.now().astimezone(pytz.utc)
+
+        self.openOrders = set()
 
     def connect(self):
         self.ib.connect("127.0.0.1", 7497, 1)
@@ -165,14 +173,20 @@ class ForexBot():
 
         if self.order_filled_event.is_set():
             self.order_filled_event.clear()
+            self.openOrders.discard(orderId)
             print("Order was filled")
         else:
             print("Timed out waiting for order fill")
             self.ib.cancelOrder(orderId, OrderCancel())
+            self.openOrders.discard(orderId)
 
     def order_status(self, orderId, status, filled, remaining, avgFillPrice, permId,
                     parentId, lastFillPrice, clientId, whyHeld, mktCapPrice):
         print(f"Order {orderId}: {status}, Filled: {filled}, Remaining: {remaining}")
+
+        if hasattr(self, "cancelOrderTracker"):
+            self.cancelOrderTracker(orderId, status)
+
         if status == "Filled":
             self.order_filled_event.set()
 
@@ -197,10 +211,12 @@ class ForexBot():
             writer.writerow(["Time", "Action", "Symbol", "Quantity"])
 
             for i in range(iterations):
-                orderTime = dt.now().astimezone(pytz.utc).strftime("%Y%m%d-%H:%M:%S")
-                if (orderTime - endTime).total_seconds() < 0:
+                timeNow = dt.now().astimezone(pytz.utc)
+                if (timeNow - endTime).total_seconds() > 0:
                     print("End time reached")
-                    exit()
+                    return
+                
+                orderTime = timeNow.astimezone(pytz.utc).strftime("%Y%m%d-%H:%M:%S")
                 self.place_buy_order(quantity)
 
                 writer.writerow([orderTime,"BUY", self.ticker, quantity])
@@ -210,7 +226,40 @@ class ForexBot():
                 sleepTime = (nextTime - dt.now().astimezone(pytz.utc)).total_seconds()
                 if sleepTime > 0:
                     time.sleep(sleepTime)
+    
+    def disconnect(self):
+        toCancel = set(self.openOrders)
         
+        if toCancel:
+            all_orders_closed_event = threading.Event()
+
+            def cancelTracker(orderId, status):
+                if orderId in toCancel and status in ("Cancelled", "ApiCancelled", "Filled"):
+                    toCancel.remove(orderId)
+                    if not toCancel:
+                        all_orders_closed_event.set()
+
+            self.cancelOrderTracker = cancelTracker
+
+            print(f"Canceling {len(toCancel)} open order(s): {list(toCancel)}")
+            for id in toCancel:
+                try:
+                    self.ib.cancelOrder(id, OrderCancel())
+                except Exception as e:
+                    print(f"Failed to cancel order {id}: {e}")
+            all_orders_closed_event.wait(timeout=10)
+            
+            if not all_orders_closed_event.is_set():
+                print("Failed to cancel open orders")
+
+        self.ib.disconnect()
+
+    def record_open_order(self, orderId, contract, order, orderState):
+        self.openOrders.add(orderId)
+
+    def open_orders_queried(self):
+        self.orders_queried_event.set()
+
 bot = ForexBot()
 print("Get historical data: \n")
 bot.get_historical_data()
@@ -218,5 +267,7 @@ print("Get real time market data: \n")
 bot.get_market_data()
 print("Place an order: \n")
 bot.place_buy_order(10)
-print("Running script for 24 hours")
+print("Running script from 11am EST - 3:30 pm PST")
 bot.buy_for_day(1)
+print("Disconnecting from Interactive Brokers")
+bot.disconnect()
