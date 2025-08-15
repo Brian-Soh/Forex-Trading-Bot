@@ -205,7 +205,7 @@ class ForexBot():
 
         #Create order log file
         timestamp = startTime.strftime("%Y%m%d-%H:%M:%S")
-        fileName = f"OrderLog_{timestamp}.csv"
+        fileName = f"./order_logs/OrderLog_{timestamp}.csv"
         with open(fileName, "a", newline="") as log:
             writer = csv.writer(log)
             writer.writerow(["Time", "Action", "Symbol", "Quantity"])
