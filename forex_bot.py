@@ -191,6 +191,29 @@ class ForexBot():
             self.order_filled_event.set()
 
     def buy_for_day(self, quantity):
+        iterations = 24
+        interval = 1
+        startTime = dt.now().astimezone(pytz.utc)
+        timestamp = startTime.strftime("%Y%m%d-%H:%M:%S")
+        fileName = f"./order_logs/OrderLog_{timestamp}.csv"
+        with open(fileName, "a", newline="") as log:
+            writer = csv.writer(log)
+            writer.writerow(["Time", "Action", "Symbol", "Quantity"])
+
+            for i in range(iterations):
+                timeNow = dt.now().astimezone(pytz.utc)
+                orderTime = timeNow.strftime("%Y%m%d-%H:%M:%S")
+                self.place_buy_order(quantity)
+
+                writer.writerow([orderTime, "BUY", self.ticker, quantity])
+                log.flush()
+
+                nextTime = startTime + timedelta(hours=(i + 1) * interval)
+                sleepTime = (nextTime - timeNow).total_seconds()
+                if sleepTime > 0:
+                    time.sleep(sleepTime)
+
+    def buy_nyse_hours(self, quantity):
         iterations = 10 #Run from 11am EST - 3:30pm EST
         interval = 30 #Every half hour
         runTime = dt.now().astimezone(pytz.utc)
@@ -268,6 +291,8 @@ bot.get_market_data()
 print("Place an order: \n")
 bot.place_buy_order(10)
 print("Running script from 11am EST - 3:30 pm PST")
+bot.buy_nyse_hours(1)
+print("Running script for 24 hours")
 bot.buy_for_day(1)
 print("Disconnecting from Interactive Brokers")
 bot.disconnect()
