@@ -7,9 +7,8 @@ on:
 
 jobs:
   deploy:
-    if: github.ref == 'refs/heads/production'
     runs-on: ubuntu-latest
-
+    
     steps:
       - name: Checkout production branch
         uses: actions/checkout@v4
