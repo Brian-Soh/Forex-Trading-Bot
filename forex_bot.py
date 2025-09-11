@@ -6,19 +6,19 @@ import csv
 import pandas as pd
 from datetime import datetime as dt, timedelta
 
-#Handles outgoing data
+# Handles outgoing data
 from ibapi.client import EClient
-#Handles incoming data
+# Handles incoming data
 from ibapi.wrapper import EWrapper
-#To request data
+# To request data
 from ibapi.contract import Contract
-#To submit orders
+# To submit orders
 from ibapi.order import *
-#To cancel orders
+# To cancel orders
 from ibapi.order_cancel import OrderCancel
 
-#Class for Interactive Brokers Connection
-#Must override function names from EWrapper to process incoming data
+# Class for Interactive Brokers Connection
+# Must override function names from EWrapper to process incoming data
 class IBapi(EWrapper, EClient):
     def __init__(self, bot_ref):
         EClient.__init__(self, self)
@@ -45,38 +45,36 @@ class IBapi(EWrapper, EClient):
         self.bot.open_orders_queried()
 
 class ForexBot():
-    reqId = 1
-    orderId = 1
-    symbol = "EUR"
-    currency = "USD"
-    ticker = "EUR/USD"
+    def __init__(self, symbol="EUR", currency="USD"):
+        # Define Fields
+        self.reqId = 1
+        self.orderId = 1
+        self.symbol = symbol
+        self.currency = currency
+        self.ticker = f"{symbol}/{currency}"
 
-    def __init__(self):
-        #Define event threads
+        # Define event threads
         self.connected_event = threading.Event()
         self.data_received_event = threading.Event()
         self.order_filled_event = threading.Event()
 
-        #Connect to IB on init
+        # Connect to IB on init
         self.ib = IBapi(self)
         
         ib_thread = threading.Thread(target=self.connect, daemon=True)
         ib_thread.start()
-        #Wait for server to connect
-        self.connected_event.wait(timeout=10)
-    
-        if not self.connected_event.is_set():
-            print("Timed out waiting to connect")
-            exit()
+        # Wait for server to connect
+        if not self.connected_event.wait(timeout=10):
+            raise TimeoutError("Timed out waiting to connect")
 
-        #Define contract
+        # Define contract
         self.contract = Contract()
         self.contract.symbol = self.symbol
         self.contract.currency = self.currency
         self.contract.secType = "CASH"
         self.contract.exchange = "IDEALPRO"
 
-        #Note start time
+        # Note start time
         self.startTime = dt.now().astimezone(pytz.utc)
 
         self.openOrders = set()
@@ -89,18 +87,13 @@ class ForexBot():
         self.orderId = orderId
         self.connected_event.set()
 
-    def disconnect(self):
-        self.ib.disconnect()
-
-    #Get historical data leading up to the start time
+    # Get historical data leading up to the start time
     def get_historical_data(self):
         endTime = self.startTime.strftime("%Y%m%d-%H:%M:%S")
         self.ib.reqHistoricalTicks(self.reqId, self.contract,  "", endTime, 20, "BID_ASK", 1, True, [])
-        self.data_received_event.wait(timeout=10)
-        
-        if not self.data_received_event.is_set():
-            print("Timed out waiting for data")
-            exit()
+        self.reqId += 1
+        if not self.data_received_event.wait(timeout=10):
+            raise TimeoutError("Timed out waiting for data")
             
         self.data_received_event.clear()
         input("Press any key to continue \n")
@@ -119,24 +112,23 @@ class ForexBot():
 
         print(self.historicalData)
         self.data_received_event.set()
-
     
     def get_market_data(self):        
-        #Assign reqId and increment for future requests
+        # Assign reqId and increment for future requests
         reqId = self.reqId
         self.reqId += 1
 
-        #Set delayed market data (3) or real time (1)
+        # Set delayed market data (3) or real time (1)
         self.ib.reqMarketDataType(3)
 
         print("Displaying market data stream for " + self.ticker + ": \n")
-        #Request market data
+        # Request market data
         self.ib.reqMktData(
             reqId=reqId,
             contract=self.contract,
             genericTickList="",
             snapshot=False,
-            regulatorySnapshot=False, #False = streaming, True = single
+            regulatorySnapshot=False, # False = streaming, True = single
             mktDataOptions=[]
         )
 
@@ -145,38 +137,36 @@ class ForexBot():
         self.stop_market_data(reqId)
     
     def tick_price(self, reqId, tickType, price, attrib):
-        #tickType 1 gives the bid price
+        # tickType 1 gives the bid price
         if tickType == 1:
             print('The current bid price is: ', price)
-        #tickType 2 gives the ask price
+        # tickType 2 gives the ask price
         if tickType == 2:
             print('The current ask price is: ', price)
 
     def stop_market_data(self, reqId):
         self.ib.cancelMktData(reqId)
 
-    def place_buy_order(self, quantity=1):
-        #Define order type
+
+    def place_market_order(self, action="BUY", quantity=1):
+        # Define order type
         order = Order()
-        order.orderType = "MKT" # or LMT
-        order.action = "BUY"
+        order.orderType = "MKT"
+        order.action = action
         order.totalQuantity = quantity
 
-        #Assign orderId and increment for future requests
+        # Assign orderId and increment for future requests
         orderId = self.orderId
         self.orderId += 1
 
         self.ib.placeOrder(orderId, self.contract, order)
 
         print("Waiting for order to fill...")
-        self.order_filled_event.wait(timeout=10)
-
-        if self.order_filled_event.is_set():
+        if self.order_filled_event.wait(timeout=10):
             self.order_filled_event.clear()
             self.openOrders.discard(orderId)
             print("Order was filled")
         else:
-            print("Timed out waiting for order fill")
             self.ib.cancelOrder(orderId, OrderCancel())
             self.openOrders.discard(orderId)
 
@@ -219,14 +209,14 @@ class ForexBot():
         runTime = dt.now().astimezone(pytz.utc)
         endTime = runTime.replace(hour=19, minute=30, second=0, microsecond=0)
 
-        #Sleep until 11am EST/3pm UTC before starting
+        # Sleep until 11am EST/3pm UTC before starting
         startTime = runTime.replace(hour=15, minute=0, second=0, microsecond=0)
         waitTime = (startTime - runTime).total_seconds()
         print(waitTime)
         if waitTime > 0:
             time.sleep(waitTime)
 
-        #Create order log file
+        # Create order log file
         timestamp = startTime.strftime("%Y%m%d-%H:%M:%S")
         fileName = f"./order_logs/OrderLog_{timestamp}.csv"
         with open(fileName, "a", newline="") as log:
@@ -249,6 +239,8 @@ class ForexBot():
                 sleepTime = (nextTime - dt.now().astimezone(pytz.utc)).total_seconds()
                 if sleepTime > 0:
                     time.sleep(sleepTime)
+
+    
     
     def disconnect(self):
         toCancel = set(self.openOrders)
@@ -288,11 +280,11 @@ print("Get historical data: \n")
 bot.get_historical_data()
 print("Get real time market data: \n")
 bot.get_market_data()
-print("Place an order: \n")
-bot.place_buy_order(10)
-print("Running script from 11am EST - 3:30 pm PST")
-bot.buy_nyse_hours(1)
-print("Running script for 24 hours")
-bot.buy_for_day(1)
+# print("Place an order: \n")
+# bot.place_market_order("BUY", 10)
+# print("Running script from 11am EST - 3:30 pm PST")
+# bot.buy_nyse_hours(1)
+# print("Running script for 24 hours")
+# bot.buy_for_day(1)
 print("Disconnecting from Interactive Brokers")
 bot.disconnect()
