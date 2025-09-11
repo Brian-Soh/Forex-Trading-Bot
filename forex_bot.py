@@ -53,7 +53,8 @@ class ForexBot():
         self.currency = currency
         self.ticker = f"{symbol}/{currency}"
 
-        # Define event threads
+        # Define thread locks and event threads
+        self.reqid_lock = threading.Lock()
         self.connected_event = threading.Event()
         self.data_received_event = threading.Event()
         self.order_filled_event = threading.Event()
@@ -79,6 +80,7 @@ class ForexBot():
 
         self.openOrders = set()
 
+
     def connect(self):
         self.ib.connect("127.0.0.1", 7497, 1)
         self.ib.run()
@@ -90,8 +92,12 @@ class ForexBot():
     # Get historical data leading up to the start time
     def get_historical_data(self):
         endTime = self.startTime.strftime("%Y%m%d-%H:%M:%S")
+        
+        with self.reqid_lock:
+            reqId = self.reqId
+            self.reqId += 1
         self.ib.reqHistoricalTicks(self.reqId, self.contract,  "", endTime, 20, "BID_ASK", 1, True, [])
-        self.reqId += 1
+        
         if not self.data_received_event.wait(timeout=10):
             raise TimeoutError("Timed out waiting for data")
             
@@ -114,9 +120,10 @@ class ForexBot():
         self.data_received_event.set()
     
     def get_market_data(self):        
-        # Assign reqId and increment for future requests
-        reqId = self.reqId
-        self.reqId += 1
+
+        with self.reqid_lock:
+            reqId = self.reqId
+            self.reqId += 1
 
         # Set delayed market data (3) or real time (1)
         self.ib.reqMarketDataType(3)
