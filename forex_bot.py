@@ -41,9 +41,6 @@ class IBapi(EWrapper, EClient):
     def openOrder(self, orderId, contract, order, orderState):
         self.bot.record_open_order(orderId, contract, order, orderState)
 
-    def openOrderEnd(self):
-        self.bot.open_orders_queried()
-
 class ForexBot():
     def __init__(self, symbol="EUR", currency="USD"):
         # Define Fields
@@ -56,6 +53,7 @@ class ForexBot():
 
         # Define thread locks and event threads
         self.reqid_lock = threading.Lock()
+        self.orderid_lock = threading.Lock()
         self.connected_event = threading.Event()
         self.data_received_event = threading.Event()
 
@@ -80,22 +78,30 @@ class ForexBot():
 
         self.openOrders = set()
 
-        # MACD Strategy
-        self.last_bid = None
+        # MACD Settings
         self.last_ask = None
-        self.ema_short = None   # fast EMA (e.g. 12 ticks)
-        self.ema_long = None    # slow EMA (e.g. 26 ticks)
-        self.signal = None      # signal line (EMA of MACD)
-        self.alpha_short = 2/(12+1)   # smoothing factors
-        self.alpha_long  = 2/(26+1)
-        self.alpha_signal = 2/(9+1)   # signal line EMA
+        self.last_bid = None
+        self.ema_short = None
+        self.ema_long = None
+        self.signal = None
+        self.alpha_short = 2 / (12 + 1)
+        self.alpha_long = 2 / (26 + 1)
+        self.alpha_signal = 2 / (9 + 1)
+
+        # Crossover control
+        self.last_diff = None        # previous (macd - signal)
+        self.last_side = None        # last traded side to prevent repeats
+        self.last_trade_ts = 0.0
+        self.cooldown = 2.0          # minimum seconds between trades
+        self.diff_eps = 1e-5         # deadband to ignore tiny jitters
 
     def connect(self):
         self.ib.connect("127.0.0.1", 7497, 1)
         self.ib.run()
     
     def confirm_connection(self, orderId):
-        self.orderId = orderId
+        with self.orderid_lock:
+            self.orderId = orderId
         self.connected_event.set()
 
     # Get historical data leading up to the start time
@@ -105,7 +111,7 @@ class ForexBot():
         with self.reqid_lock:
             reqId = self.reqId
             self.reqId += 1
-        self.ib.reqHistoricalTicks(self.reqId, self.contract,  "", endTime, 20, "BID_ASK", 1, True, [])
+        self.ib.reqHistoricalTicks(reqId, self.contract,  "", endTime, 20, "BID_ASK", 1, True, [])
         
         if not self.data_received_event.wait(timeout=10):
             raise TimeoutError("Timed out waiting for data")
@@ -158,32 +164,50 @@ class ForexBot():
             print('The current bid price is: ', price)
             self.last_bid = price
         # tickType 2 gives the ask price
-        if tickType == 2:
+        elif tickType == 2:
             print('The current ask price is: ', price)
             self.last_ask = price
-        print(self.last_bid, self.last_ask)
-        if self.last_bid and self.last_ask:
-            mid = (self.last_bid + self.last_ask) / 2
-            self.last_bid = self.last_ask = None
-            # --- EMA updates ---
-            if self.ema_short is None:
-                # initialize with first price
-                self.ema_short = self.ema_long = self.signal = mid
-            else:
-                self.ema_short = (mid - self.ema_short) * self.alpha_short + self.ema_short
-                self.ema_long  = (mid - self.ema_long)  * self.alpha_long  + self.ema_long
-                macd = self.ema_short - self.ema_long
-                self.signal = (macd - self.signal) * self.alpha_signal + self.signal
-                
-                print(macd)
 
-                # --- Trading rule: MACD crossover ---
-                if macd > self.signal:
-                    print("MACD > Signal → Buy")
-                    self.place_market_order("BUY", 1)
-                elif macd < self.signal:
-                    print("MACD < Signal → Sell")
-                    self.place_market_order("SELL", 1)
+        if self.last_bid is not None and self.last_ask is not None:
+            mid = (self.last_bid + self.last_ask) / 2.0
+            self.last_mid = mid
+            self.update_macd(mid)
+            self.last_bid = self.last_ask = None
+
+    def update_macd(self, mid):
+            
+        if self.ema_short is None:
+            self.ema_short = self.ema_long = self.signal = mid
+            self.last_diff = 0.0
+            return
+        
+        # EMA updates
+        self.ema_short = (mid - self.ema_short) * self.alpha_short + self.ema_short
+        self.ema_long  = (mid - self.ema_long)  * self.alpha_long  + self.ema_long
+        macd = self.ema_short - self.ema_long
+        self.signal = (macd - self.signal) * self.alpha_signal + self.signal
+        diff = macd - self.signal
+
+        print(diff)
+
+        # Trade ONLY on zero-cross with deadband and cooldown
+        now = time.time()
+        crossed_up   = self.last_diff <= -self.diff_eps and diff >=  self.diff_eps
+        crossed_down = self.last_diff >=  self.diff_eps and diff <= -self.diff_eps
+
+        if (now - self.last_trade_ts) >= self.cooldown:
+            if crossed_up and self.last_side != "BUY":
+                print(f"MACD cross↑ → BUY | macd={macd:.6f} signal={self.signal:.6f}")
+                self.place_market_order("BUY", 1)
+                self.last_trade_ts = now
+                self.last_side = "BUY"
+            elif crossed_down and self.last_side != "SELL":
+                print(f"MACD cross↓ → SELL | macd={macd:.6f} signal={self.signal:.6f}")
+                self.place_market_order("SELL", 1)
+                self.last_trade_ts = now
+                self.last_side = "SELL"
+
+        self.last_diff = diff
 
     def stop_market_data(self, reqId):
         self.ib.cancelMktData(reqId)
@@ -196,9 +220,9 @@ class ForexBot():
         order.action = action
         order.totalQuantity = quantity
 
-        # Assign orderId and increment for future requests
-        orderId = self.orderId
-        self.orderId += 1
+        with self.orderid_lock:
+            orderId = self.orderId
+            self.orderId += 1
 
         # create a per-order event BEFORE placing
         evt = threading.Event()
@@ -329,9 +353,6 @@ class ForexBot():
 
     def record_open_order(self, orderId, contract, order, orderState):
         self.openOrders.add(orderId)
-
-    def open_orders_queried(self):
-        self.orders_queried_event.set()
 
 bot = ForexBot()
 print("Get historical data: \n")
