@@ -52,12 +52,12 @@ class ForexBot():
         self.symbol = symbol
         self.currency = currency
         self.ticker = f"{symbol}/{currency}"
+        self.order_events = {} # Create new threads for each order
 
         # Define thread locks and event threads
         self.reqid_lock = threading.Lock()
         self.connected_event = threading.Event()
         self.data_received_event = threading.Event()
-        self.order_filled_event = threading.Event()
 
         # Connect to IB on init
         self.ib = IBapi(self)
@@ -80,6 +80,15 @@ class ForexBot():
 
         self.openOrders = set()
 
+        # MACD Strategy
+        self.last_bid = None
+        self.last_ask = None
+        self.ema_short = None   # fast EMA (e.g. 12 ticks)
+        self.ema_long = None    # slow EMA (e.g. 26 ticks)
+        self.signal = None      # signal line (EMA of MACD)
+        self.alpha_short = 2/(12+1)   # smoothing factors
+        self.alpha_long  = 2/(26+1)
+        self.alpha_signal = 2/(9+1)   # signal line EMA
 
     def connect(self):
         self.ib.connect("127.0.0.1", 7497, 1)
@@ -126,7 +135,7 @@ class ForexBot():
             self.reqId += 1
 
         # Set delayed market data (3) or real time (1)
-        self.ib.reqMarketDataType(3)
+        self.ib.reqMarketDataType(1)
 
         print("Displaying market data stream for " + self.ticker + ": \n")
         # Request market data
@@ -147,9 +156,34 @@ class ForexBot():
         # tickType 1 gives the bid price
         if tickType == 1:
             print('The current bid price is: ', price)
+            self.last_bid = price
         # tickType 2 gives the ask price
         if tickType == 2:
             print('The current ask price is: ', price)
+            self.last_ask = price
+        print(self.last_bid, self.last_ask)
+        if self.last_bid and self.last_ask:
+            mid = (self.last_bid + self.last_ask) / 2
+            self.last_bid = self.last_ask = None
+            # --- EMA updates ---
+            if self.ema_short is None:
+                # initialize with first price
+                self.ema_short = self.ema_long = self.signal = mid
+            else:
+                self.ema_short = (mid - self.ema_short) * self.alpha_short + self.ema_short
+                self.ema_long  = (mid - self.ema_long)  * self.alpha_long  + self.ema_long
+                macd = self.ema_short - self.ema_long
+                self.signal = (macd - self.signal) * self.alpha_signal + self.signal
+                
+                print(macd)
+
+                # --- Trading rule: MACD crossover ---
+                if macd > self.signal:
+                    print("MACD > Signal → Buy")
+                    self.place_market_order("BUY", 1)
+                elif macd < self.signal:
+                    print("MACD < Signal → Sell")
+                    self.place_market_order("SELL", 1)
 
     def stop_market_data(self, reqId):
         self.ib.cancelMktData(reqId)
@@ -166,16 +200,32 @@ class ForexBot():
         orderId = self.orderId
         self.orderId += 1
 
+        # create a per-order event BEFORE placing
+        evt = threading.Event()
+        self.order_events[orderId] = evt
+
         self.ib.placeOrder(orderId, self.contract, order)
 
-        print("Waiting for order to fill...")
-        if self.order_filled_event.wait(timeout=10):
-            self.order_filled_event.clear()
-            self.openOrders.discard(orderId)
-            print("Order was filled")
+        threading.Thread(
+            target=self._await_fill_or_timeout,
+            args=(orderId, evt),
+            daemon=True
+        ).start()
+
+    def _await_fill_or_timeout(self, orderId, evt, timeout=10):
+        print(f"Waiting for order {orderId} to fill")
+        if evt.wait(timeout=timeout):
+            print(f"Order {orderId} was filled")
         else:
-            self.ib.cancelOrder(orderId, OrderCancel())
-            self.openOrders.discard(orderId)
+            print(f"Timeout waiting for order {orderId}; attempting cancel")
+            try:
+                self.ib.cancelOrder(orderId, OrderCancel())
+            except Exception as e:
+                print(f"Cancel error for {orderId}: {e}")
+
+        self.openOrders.discard(orderId)
+        self.order_events.pop(orderId, None)
+
 
     def order_status(self, orderId, status, filled, remaining, avgFillPrice, permId,
                     parentId, lastFillPrice, clientId, whyHeld, mktCapPrice):
@@ -183,9 +233,10 @@ class ForexBot():
 
         if hasattr(self, "cancelOrderTracker"):
             self.cancelOrderTracker(orderId, status)
-
         if status == "Filled":
-            self.order_filled_event.set()
+            evt = self.order_events.get(orderId)
+            if evt:
+                evt.set()
 
     def buy_for_day(self, quantity):
         iterations = 24
