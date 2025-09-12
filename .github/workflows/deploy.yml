@@ -32,7 +32,7 @@ jobs:
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           REPO_PATH: /home/ubuntu/Downloads/Forex-Trading-Bot
-          REPO_URL: git@github.com:Brian-Soh/Forex-Trading-Bot.git
+          REPO_URL: https://github.com/Brian-Soh/Forex-Trading-Bot.git
         run: |
           set -euo pipefail
 
@@ -44,11 +44,6 @@ jobs:
             sudo apt-get update -y
             sudo apt-get install -y git python3 python3-pip
           fi
-          # Trust GitHub host key
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          ssh-keyscan -H github.com >> ~/.ssh/known_hosts
-
 
           # Clone if missing
           if [ ! -d "$REPO_PATH/.git" ]; then
