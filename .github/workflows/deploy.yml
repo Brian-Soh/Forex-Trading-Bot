@@ -31,16 +31,13 @@ jobs:
       - name: Deploy to EC2
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
-          REPO_PATH: /home/ubuntu/Forex-Trading-Bot
-          REPO_URL: git@github.com:Brian-Soh/Forex-Trading-Bot.git
+          REPO_PATH: /home/ubuntu/Downloads/Forex-Trading-Bot
+          REPO_URL: https://github.com/Brian-Soh/Forex-Trading-Bot.git
         run: |
           set -euo pipefail
 
           ssh -o StrictHostKeyChecking=yes ubuntu@"$EC2_HOST" bash <<'EOSSH'
           set -euo pipefail
-
-          REPO_PATH="/home/ubuntu/Forex-Trading-Bot"
-          REPO_URL="git@github.com:Brian-Soh/Forex-Trading-Bot.git"
 
           # Ensure git and python exist
           if ! command -v git >/dev/null 2>&1; then
