@@ -134,7 +134,7 @@ class ForexBot():
         print(self.historicalData)
         self.data_received_event.set()
     
-    def get_market_data(self):        
+    def run_strategy(self, manual=True):        
 
         with self.reqid_lock:
             reqId = self.reqId
@@ -143,7 +143,7 @@ class ForexBot():
         # Set delayed market data (3) or real time (1)
         self.ib.reqMarketDataType(1)
 
-        print("Displaying market data stream for " + self.ticker + ": \n")
+        print("Running strategy for " + self.ticker + ": \n")
         # Request market data
         self.ib.reqMktData(
             reqId=reqId,
@@ -154,9 +154,12 @@ class ForexBot():
             mktDataOptions=[]
         )
 
-        input("Press any key to stop market data stream \n")
-        print('Stopping market data stream for ' + self.ticker + ". \n")
-        self.stop_market_data(reqId)
+        if manual:
+            input("Press any key to stop strategy \n")
+            print('Stopping strategy for ' + self.ticker + ". \n")
+            self.stop_market_data(reqId)
+        else:
+            return
     
     def tick_price(self, reqId, tickType, price, attrib):
         # tickType 1 gives the bid price
@@ -212,7 +215,6 @@ class ForexBot():
     def stop_market_data(self, reqId):
         self.ib.cancelMktData(reqId)
 
-
     def place_market_order(self, action="BUY", quantity=1):
         # Define order type
         order = Order()
@@ -224,9 +226,14 @@ class ForexBot():
             orderId = self.orderId
             self.orderId += 1
 
-        # create a per-order event BEFORE placing
         evt = threading.Event()
         self.order_events[orderId] = evt
+
+        with open(self.fileName, "a", newline="") as log:
+            writer = csv.writer(log)
+            timeNow = dt.now().astimezone(pytz.utc)
+            orderTime = timeNow.strftime("%Y%m%d-%H:%M:%S")
+            writer.writerow([orderTime, "BUY", self.ticker, quantity])
 
         self.ib.placeOrder(orderId, self.contract, order)
 
@@ -250,7 +257,6 @@ class ForexBot():
         self.openOrders.discard(orderId)
         self.order_events.pop(orderId, None)
 
-
     def order_status(self, orderId, status, filled, remaining, avgFillPrice, permId,
                     parentId, lastFillPrice, clientId, whyHeld, mktCapPrice):
         print(f"Order {orderId}: {status}, Filled: {filled}, Remaining: {remaining}")
@@ -263,37 +269,31 @@ class ForexBot():
                 evt.set()
 
     def buy_for_day(self, quantity):
-        iterations = 24
-        interval = 1
+        hours = 24
         startTime = dt.now().astimezone(pytz.utc)
         timestamp = startTime.strftime("%Y%m%d-%H:%M:%S")
-        fileName = f"./order_logs/OrderLog_{timestamp}.csv"
-        with open(fileName, "a", newline="") as log:
+        endTime = startTime + timedelta(hours=hours)
+        
+        self.fileName = f"./order_logs/OrderLog_{timestamp}.csv"
+        with open(self.fileName, "a", newline="") as log:
             writer = csv.writer(log)
             writer.writerow(["Time", "Action", "Symbol", "Quantity"])
+            log.flush()
 
-            for i in range(iterations):
-                timeNow = dt.now().astimezone(pytz.utc)
-                orderTime = timeNow.strftime("%Y%m%d-%H:%M:%S")
-                self.place_buy_order(quantity)
+        self.run_strategy(False)
 
-                writer.writerow([orderTime, "BUY", self.ticker, quantity])
-                log.flush()
+        print(f"Running strategy for 24h")
 
-                nextTime = startTime + timedelta(hours=(i + 1) * interval)
-                sleepTime = (nextTime - timeNow).total_seconds()
-                if sleepTime > 0:
-                    time.sleep(sleepTime)
+        time.sleep(hours * 60 * 60)
 
     def buy_nyse_hours(self, quantity):
-        iterations = 10 #Run from 11am EST - 3:30pm EST
-        interval = 30 #Every half hour
         runTime = dt.now().astimezone(pytz.utc)
         endTime = runTime.replace(hour=19, minute=30, second=0, microsecond=0)
 
         # Sleep until 11am EST/3pm UTC before starting
         startTime = runTime.replace(hour=15, minute=0, second=0, microsecond=0)
         waitTime = (startTime - runTime).total_seconds()
+
         print(waitTime)
         if waitTime > 0:
             time.sleep(waitTime)
@@ -304,25 +304,13 @@ class ForexBot():
         with open(fileName, "a", newline="") as log:
             writer = csv.writer(log)
             writer.writerow(["Time", "Action", "Symbol", "Quantity"])
-
-            for i in range(iterations):
-                timeNow = dt.now().astimezone(pytz.utc)
-                if (timeNow - endTime).total_seconds() > 0:
-                    print("End time reached")
-                    return
                 
-                orderTime = timeNow.astimezone(pytz.utc).strftime("%Y%m%d-%H:%M:%S")
-                self.place_buy_order(quantity)
+        self.run_strategy(False)
+        print(f"Running strategy")
 
-                writer.writerow([orderTime,"BUY", self.ticker, quantity])
-                log.flush()
+        sleepTime = (endTime - dt.now()).seconds()
 
-                nextTime = startTime + timedelta(minutes = (i + 1) * interval)
-                sleepTime = (nextTime - dt.now().astimezone(pytz.utc)).total_seconds()
-                if sleepTime > 0:
-                    time.sleep(sleepTime)
-
-    
+        time.sleep(sleepTime)
     
     def disconnect(self):
         toCancel = set(self.openOrders)
@@ -357,12 +345,12 @@ class ForexBot():
 bot = ForexBot()
 print("Get historical data: \n")
 bot.get_historical_data()
-print("Get real time market data: \n")
-bot.get_market_data()
+# print("Run MACD strategy \n")
+# bot.run_strategy()
 # print("Place an order: \n")
 # bot.place_market_order("BUY", 10)
-# print("Running script from 11am EST - 3:30 pm PST")
-# bot.buy_nyse_hours(1)
+print("Running script from 11am EST - 3:30 pm PST")
+bot.buy_nyse_hours(1)
 # print("Running script for 24 hours")
 # bot.buy_for_day(1)
 print("Disconnecting from Interactive Brokers")
