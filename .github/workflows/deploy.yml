@@ -27,33 +27,39 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
-    run: |
-      set -euo pipefail
 
-      ssh -o StrictHostKeyChecking=yes ubuntu@"$EC2_HOST" bash <<'EOSSH'
-      set -euo pipefail
+      - name: Deploy to EC2
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          set -euo pipefail
 
-      REPO_PATH="/home/ubuntu/Downloads/Forex-Trading-Bot"
-      REPO_URL="https://github.com/Brian-Soh/Forex-Trading-Bot.git"
+          ssh -o StrictHostKeyChecking=yes ubuntu@"$EC2_HOST" bash <<'EOSSH'
+          set -euo pipefail
 
-      # Ensure git and python exist
-      if ! command -v git >/dev/null 2>&1; then
-        sudo apt-get update -y
-        sudo apt-get install -y git python3 python3-pip
-      fi
+          # Define repo vars in the remote session
+          REPO_PATH="/home/ubuntu/Downloads/Forex-Trading-Bot"
+          REPO_URL="https://github.com/Brian-Soh/Forex-Trading-Bot.git"
 
-      # Clone if missing
-      if [ ! -d "$REPO_PATH/.git" ]; then
-        mkdir -p "$REPO_PATH"
-        git clone --branch production --single-branch "$REPO_URL" "$REPO_PATH"
-      fi
+          # Ensure git and python exist
+          if ! command -v git >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y git python3 python3-pip
+          fi
 
-      cd "$REPO_PATH"
-      git fetch --all
-      git reset --hard origin/production
+          # Clone if missing
+          if [ ! -d "$REPO_PATH/.git" ]; then
+            mkdir -p "$REPO_PATH"
+            git clone --branch production --single-branch "$REPO_URL" "$REPO_PATH"
+          fi
 
-      /usr/bin/pip3 install --upgrade pip
-      /usr/bin/pip3 install -r requirements.txt
+          cd "$REPO_PATH"
+          git fetch --all
+          git reset --hard origin/production
 
-      echo "Deployed \$(git rev-parse --short HEAD) at \$(date -Is)"
-      EOSSH
+          # Install/upgrade deps
+          /usr/bin/pip3 install --upgrade pip
+          /usr/bin/pip3 install -r requirements.txt
+
+          echo "Deployed $(git rev-parse --short HEAD) at $(date -Is)"
+          EOSSH
