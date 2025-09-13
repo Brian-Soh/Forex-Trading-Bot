@@ -61,5 +61,8 @@ jobs:
           /usr/bin/pip3 install --upgrade pip
           /usr/bin/pip3 install -r requirements.txt
 
+          # Make all .sh scripts executable (only in REPO_PATH top level)
+          sudo chmod +x "$REPO_PATH"/*.sh || true
+
           echo "Deployed $(git rev-parse --short HEAD) at $(date -Is)"
           EOSSH
