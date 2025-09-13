@@ -96,7 +96,7 @@ class ForexBot():
         self.diff_eps = 1e-5         # deadband to ignore tiny jitters
 
     def connect(self):
-        self.ib.connect("127.0.0.1", 7497, 1)
+        self.ib.connect("127.0.0.1", 4002, 1)
         self.ib.run()
     
     def confirm_connection(self, orderId):

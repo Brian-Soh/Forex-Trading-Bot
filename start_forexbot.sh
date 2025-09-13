@@ -19,4 +19,4 @@ if ! [ -n "$XVFB_PIDS" ]; then
 fi
 
 echo "Running Forex Bot"
-nohup python3 /home/ubuntu/Forex-Trading-Bot/ForexBot.py &
+nohup python3 /home/ubuntu/Downloads/Forex-Trading-Bot/forex_bot.py &
