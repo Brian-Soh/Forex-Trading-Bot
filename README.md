@@ -14,7 +14,7 @@ Here is a trade log of running the trading bot for 24 hours on the EUR/USD excha
 
 <img width="353" height="214" alt="image" src="https://github.com/user-attachments/assets/1bd2704d-be77-4329-80c7-8c90a391b005" />
 
-We can now analyze the charts of when the trades occured through TradingView. Evidently, the MACD indicator proved useful in jumping on upward trends in each instance!
+We can now analyze the charts of when the trades occured through TradingView. Evidently, the MACD indicator proved successful in jumping on upward trends in most instances!
 
 Trade 1:
 <img width="421" height="469" alt="image" src="https://github.com/user-attachments/assets/135248a8-61bf-4bdd-b269-0037c4d8c5eb" />
