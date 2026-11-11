@@ -1,4 +1,6 @@
 import ibapi
+import signal
+import sys
 import threading
 import time
 import pytz
@@ -342,16 +344,22 @@ class ForexBot():
     def record_open_order(self, orderId, contract, order, orderState):
         self.openOrders.add(orderId)
 
-bot = ForexBot()
-# print("Get historical data: \n")
-# bot.get_historical_data()
-# print("Run MACD strategy \n")
-# bot.run_strategy()
-# print("Place an order: \n")
-# bot.place_market_order("BUY", 10)
-# print("Running script from 11am EST - 3:30 pm EST")
-# bot.buy_nyse_hours(1)
-print("Running script for 24 hours")
-bot.buy_for_day(1)
-print("Disconnecting from Interactive Brokers")
-bot.disconnect()
+if __name__ == "__main__":
+    # Makes `kill` run the cleanup in `finally` too
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+
+    bot = ForexBot()
+    try:
+        # print("Get historical data: \n")
+        # bot.get_historical_data()
+        # print("Run MACD strategy \n")
+        # bot.run_strategy()
+        # print("Place an order: \n")
+        # bot.place_market_order("BUY", 10)
+        # print("Running script from 11am EST - 3:30 pm EST")
+        # bot.buy_nyse_hours(1)
+        print("Running script for 24 hours")
+        bot.buy_for_day(1)
+    finally:
+        print("Disconnecting from Interactive Brokers")
+        bot.disconnect()
