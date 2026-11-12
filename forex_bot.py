@@ -67,6 +67,7 @@ class ForexBot():
         self.mktReqId = None         # live market data stream, re-requested after a reconnect
 
         # What the bot itself has traded, for P&L and for closing out on shutdown
+        self.quantity = 1
         self.position = 0.0
         self.cash = 0.0
         self.pending = {}            # orderId -> action, until the order fills or is cancelled
@@ -241,12 +242,12 @@ class ForexBot():
         if (now - self.last_trade_ts) >= self.cooldown:
             if crossed_up and self.last_side != "BUY":
                 print(f"MACD cross↑ → BUY | macd={macd:.6f} signal={self.signal:.6f}")
-                self.place_market_order("BUY", 1)
+                self.place_market_order("BUY", self.quantity)
                 self.last_trade_ts = now
                 self.last_side = "BUY"
             elif crossed_down and self.last_side != "SELL":
                 print(f"MACD cross↓ → SELL | macd={macd:.6f} signal={self.signal:.6f}")
-                self.place_market_order("SELL", 1)
+                self.place_market_order("SELL", self.quantity)
                 self.last_trade_ts = now
                 self.last_side = "SELL"
 
@@ -270,12 +271,7 @@ class ForexBot():
 
         evt = threading.Event()
         self.order_events[orderId] = evt
-
-        with open(self.fileName, "a", newline="") as log:
-            writer = csv.writer(log)
-            timeNow = dt.now().astimezone(pytz.utc)
-            orderTime = timeNow.strftime("%Y%m%d-%H:%M:%S")
-            writer.writerow([orderTime, "BUY", self.ticker, quantity])
+        self.pending[orderId] = action
 
         self.ib.placeOrder(orderId, self.contract, order)
 
@@ -284,6 +280,21 @@ class ForexBot():
             args=(orderId, evt),
             daemon=True
         ).start()
+
+    # Log a fill and update the bot's own position and P&L
+    def record_fill(self, action, quantity, price):
+        signed = quantity if action == "BUY" else -quantity
+        self.position += signed
+        self.cash -= signed * price
+        # shortcut: P&L leaves out commissions, add IB's commissionReport callback when fees matter
+        pnl = self.cash + self.position * price
+
+        with open(self.fileName, "a", newline="") as log:
+            writer = csv.writer(log)
+            if log.tell() == 0:
+                writer.writerow(["Time", "Action", "Symbol", "Quantity", "Price", "Position", "PnL"])
+            fillTime = dt.now().astimezone(pytz.utc).strftime("%Y%m%d-%H:%M:%S")
+            writer.writerow([fillTime, action, self.ticker, quantity, price, self.position, round(pnl, 5)])
 
     def _await_fill_or_timeout(self, orderId, evt, timeout=10):
         print(f"Waiting for order {orderId} to fill")
@@ -303,6 +314,12 @@ class ForexBot():
                     parentId, lastFillPrice, clientId, whyHeld, mktCapPrice):
         print(f"Order {orderId}: {status}, Filled: {filled}, Remaining: {remaining}")
 
+        # IB repeats final statuses, so pop to count each order once. A cancelled order can be part-filled.
+        if status in ("Filled", "Cancelled", "ApiCancelled"):
+            action = self.pending.pop(orderId, None)
+            if action and filled:
+                self.record_fill(action, float(filled), avgFillPrice)
+
         if hasattr(self, "cancelOrderTracker"):
             self.cancelOrderTracker(orderId, status)
         if status == "Filled":
@@ -312,15 +329,7 @@ class ForexBot():
 
     def buy_for_day(self, quantity):
         hours = 24
-        startTime = dt.now().astimezone(pytz.utc)
-        timestamp = startTime.strftime("%Y%m%d-%H:%M:%S")
-        endTime = startTime + timedelta(hours=hours)
-        
-        self.fileName = f"./order_logs/OrderLog_{timestamp}.csv"
-        with open(self.fileName, "a", newline="") as log:
-            writer = csv.writer(log)
-            writer.writerow(["Time", "Action", "Symbol", "Quantity"])
-            log.flush()
+        self.quantity = quantity
 
         self.run_strategy(False)
 
@@ -340,13 +349,6 @@ class ForexBot():
         if waitTime > 0:
             time.sleep(waitTime)
 
-        # Create order log file
-        timestamp = startTime.strftime("%Y%m%d-%H:%M:%S")
-        fileName = f"./order_logs/OrderLog_{timestamp}.csv"
-        with open(fileName, "a", newline="") as log:
-            writer = csv.writer(log)
-            writer.writerow(["Time", "Action", "Symbol", "Quantity"])
-                
         self.run_strategy(False)
         print(f"Running strategy")
 
