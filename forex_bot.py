@@ -6,7 +6,7 @@ import time
 import pytz
 import csv
 import pandas as pd
-from datetime import datetime as dt, timedelta
+from datetime import datetime as dt
 
 # Handles outgoing data
 from ibapi.client import EClient
@@ -28,6 +28,11 @@ class IBapi(EWrapper, EClient):
 
     def nextValidId(self, orderId):
         self.bot.confirm_connection(orderId)
+
+    def error(self, reqId, *args):
+        # Newer ibapi builds pass errorTime before errorCode, older ones don't
+        code, msg = args[1:3] if isinstance(args[1], int) else args[:2]
+        self.bot.on_error(reqId, code, msg)
 
     def tickPrice(self, reqId, tickType, price, attrib):
         self.bot.tick_price(reqId, tickType, price, attrib)
@@ -58,6 +63,13 @@ class ForexBot():
         self.orderid_lock = threading.Lock()
         self.connected_event = threading.Event()
         self.data_received_event = threading.Event()
+        self.stopping = threading.Event()
+        self.mktReqId = None         # live market data stream, re-requested after a reconnect
+
+        # What the bot itself has traded, for P&L and for closing out on shutdown
+        self.position = 0.0
+        self.cash = 0.0
+        self.pending = {}            # orderId -> action, until the order fills or is cancelled
 
         # Connect to IB on init
         self.ib = IBapi(self)
@@ -77,6 +89,7 @@ class ForexBot():
 
         # Note start time
         self.startTime = dt.now().astimezone(pytz.utc)
+        self.fileName = f"./order_logs/OrderLog_{self.startTime.strftime('%Y%m%d-%H:%M:%S')}.csv"
 
         self.openOrders = set()
 
@@ -98,13 +111,28 @@ class ForexBot():
         self.diff_eps = 1e-5         # deadband to ignore tiny jitters
 
     def connect(self):
-        self.ib.connect("127.0.0.1", 4002, 1)
-        self.ib.run()
+        # IB Gateway restarts daily, so keep reconnecting until disconnect() is called
+        while not self.stopping.is_set():
+            try:
+                self.ib.connect("127.0.0.1", 4002, 1)
+                self.ib.run()
+            except Exception as e:
+                print(f"IB connection error: {e}")
+            if not self.stopping.wait(10):
+                print("Disconnected from IB, reconnecting")
     
     def confirm_connection(self, orderId):
         with self.orderid_lock:
             self.orderId = orderId
         self.connected_event.set()
+        # Does nothing on the first connect, restores the stream after a reconnect
+        self.subscribe()
+
+    def on_error(self, reqId, code, msg):
+        print(f"IB error {code} (id {reqId}): {msg}")
+        # 1101 = link to IB is back but market data subscriptions were lost
+        if code == 1101:
+            self.subscribe()
 
     # Get historical data leading up to the start time
     def get_historical_data(self):
@@ -139,31 +167,41 @@ class ForexBot():
     def run_strategy(self, manual=True):        
 
         with self.reqid_lock:
-            reqId = self.reqId
+            self.mktReqId = self.reqId
             self.reqId += 1
+
+        print("Running strategy for " + self.ticker + ": \n")
+        self.subscribe()
+
+        if manual:
+            input("Press any key to stop strategy \n")
+            print('Stopping strategy for ' + self.ticker + ". \n")
+            self.stop_market_data()
+        else:
+            return
+
+    def subscribe(self):
+        if self.mktReqId is None:
+            return
 
         # Set delayed market data (3) or real time (1)
         self.ib.reqMarketDataType(1)
 
-        print("Running strategy for " + self.ticker + ": \n")
         # Request market data
         self.ib.reqMktData(
-            reqId=reqId,
+            reqId=self.mktReqId,
             contract=self.contract,
             genericTickList="",
             snapshot=False,
             regulatorySnapshot=False, # False = streaming, True = single
             mktDataOptions=[]
         )
-
-        if manual:
-            input("Press any key to stop strategy \n")
-            print('Stopping strategy for ' + self.ticker + ". \n")
-            self.stop_market_data(reqId)
-        else:
-            return
     
     def tick_price(self, reqId, tickType, price, attrib):
+        # No new trades once shutdown has started
+        if self.stopping.is_set():
+            return
+
         # tickType 1 gives the bid price
         if tickType == 1:
             print('The current bid price is: ', price)
@@ -214,8 +252,10 @@ class ForexBot():
 
         self.last_diff = diff
 
-    def stop_market_data(self, reqId):
-        self.ib.cancelMktData(reqId)
+    def stop_market_data(self):
+        if self.mktReqId is not None:
+            self.ib.cancelMktData(self.mktReqId)
+            self.mktReqId = None
 
     def place_market_order(self, action="BUY", quantity=1):
         # Define order type
@@ -315,6 +355,9 @@ class ForexBot():
         time.sleep(sleepTime)
     
     def disconnect(self):
+        self.stopping.set()
+        self.stop_market_data()
+
         toCancel = set(self.openOrders)
         
         if toCancel:
