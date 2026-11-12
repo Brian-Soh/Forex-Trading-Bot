@@ -338,11 +338,13 @@ class ForexBot():
         time.sleep(hours * 60 * 60)
 
     def buy_nyse_hours(self, quantity):
-        runTime = dt.now().astimezone(pytz.utc)
-        endTime = runTime.replace(hour=19, minute=30, second=0, microsecond=0)
+        self.quantity = quantity
+        # New York time, so the window stays right when daylight saving changes
+        runTime = dt.now(pytz.timezone("America/New_York"))
+        endTime = runTime.replace(hour=15, minute=30, second=0, microsecond=0)
 
-        # Sleep until 11am EST/3pm UTC before starting
-        startTime = runTime.replace(hour=15, minute=0, second=0, microsecond=0)
+        # Sleep until 11am New York time before starting
+        startTime = runTime.replace(hour=11, minute=0, second=0, microsecond=0)
         waitTime = (startTime - runTime).total_seconds()
 
         print(waitTime)
@@ -352,9 +354,9 @@ class ForexBot():
         self.run_strategy(False)
         print(f"Running strategy")
 
-        sleepTime = (endTime - dt.now()).seconds()
-
-        time.sleep(sleepTime)
+        sleepTime = (endTime - dt.now(pytz.utc)).total_seconds()
+        if sleepTime > 0:
+            time.sleep(sleepTime)
     
     def disconnect(self):
         self.stopping.set()
