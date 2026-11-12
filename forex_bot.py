@@ -280,6 +280,7 @@ class ForexBot():
             args=(orderId, evt),
             daemon=True
         ).start()
+        return evt
 
     # Log a fill and update the bot's own position and P&L
     def record_fill(self, action, quantity, price):
@@ -385,6 +386,15 @@ class ForexBot():
             
             if not all_orders_closed_event.is_set():
                 print("Failed to cancel open orders")
+
+        # Close whatever the bot itself opened so no position is left on the account
+        if self.position:
+            action = "SELL" if self.position > 0 else "BUY"
+            print(f"Closing position of {self.position} {self.ticker}")
+            if not self.place_market_order(action, abs(self.position)).wait(timeout=10):
+                print(f"Failed to close position of {self.position} {self.ticker}, close it by hand")
+        if not self.position:
+            print(f"P&L before commissions: {self.cash:.5f} {self.currency}")
 
         self.ib.disconnect()
 
