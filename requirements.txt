@@ -1,3 +1,5 @@
-ibapi
+# Not on PyPI (it stops at 9.81): install from IB's TWS API download, source/pythonclient.
+# 10.30 is the first build with ibapi.order_cancel. Tested with 10.37.2.
+ibapi>=10.30
 pytz
 pandas
