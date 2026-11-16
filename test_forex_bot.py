@@ -3,7 +3,10 @@ import os
 import tempfile
 from decimal import Decimal
 
-from forex_bot import ForexBot, IBapi
+import threading
+
+from forex_bot import ForexBot, IBapi, load_strategy
+from strategies.macd import Strategy as MACD
 
 
 def test_fills_track_position_and_pnl():
@@ -40,7 +43,67 @@ def test_error_callback_handles_both_ibapi_signatures():
     assert seen == [(502, "old style"), (502, "new style")]
 
 
+def macd_signals(prices, cooldown=0):
+    macd = MACD(cooldown=cooldown)
+    return [s for p in prices if (s := macd.on_tick(p, p))]
+
+
+def test_macd_trades_slow_crosses_once_each():
+    step = 0.00005
+    prices = [1.10 - step * i for i in range(100)]
+    prices += [prices[-1] + step * i for i in range(200)]
+    prices += [prices[-1] - step * i for i in range(200)]
+    assert macd_signals(prices) == ["BUY", "SELL"]
+    assert macd_signals(prices, cooldown=3600) == ["BUY"]
+
+
+def test_macd_does_not_trade_on_the_first_move_after_start_up():
+    assert macd_signals([1.10] * 60 + [1.10 + 0.00005 * i for i in range(100)]) == []
+
+
+class Stub:
+    def __init__(self, answers):
+        self.answers, self.seen = answers, []
+
+    def on_tick(self, bid, ask):
+        self.seen.append((bid, ask))
+        return self.answers.pop(0)
+
+
+def test_bot_turns_strategy_signals_into_orders():
+    orders = []
+    bot = ForexBot.__new__(ForexBot)
+    bot.stopping = threading.Event()
+    bot.last_bid = bot.last_ask = None
+    bot.quantity = 3
+    bot.strategy = Stub(["BUY", "buy", None])
+    bot.place_market_order = lambda action, quantity: orders.append((action, quantity))
+
+    bot.tick_price(1, 1, 1.10, None)
+    assert bot.strategy.seen == []
+    bot.tick_price(1, 2, 1.12, None)
+    assert bot.strategy.seen == [(1.10, 1.12)]
+    for _ in range(2):
+        bot.tick_price(1, 1, 1.10, None)
+        bot.tick_price(1, 2, 1.12, None)
+    assert orders == [("BUY", 3)]
+
+
+def test_load_strategy_finds_strategies_by_file_name():
+    assert isinstance(load_strategy("macd"), MACD)
+    try:
+        load_strategy("no_such_strategy")
+    except ModuleNotFoundError as e:
+        assert "no_such_strategy" in str(e)
+    else:
+        raise AssertionError("an unknown strategy name must fail")
+
+
 if __name__ == "__main__":
     test_fills_track_position_and_pnl()
     test_error_callback_handles_both_ibapi_signatures()
+    test_macd_trades_slow_crosses_once_each()
+    test_macd_does_not_trade_on_the_first_move_after_start_up()
+    test_bot_turns_strategy_signals_into_orders()
+    test_load_strategy_finds_strategies_by_file_name()
     print("ok")

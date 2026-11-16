@@ -1,4 +1,5 @@
 import ibapi
+import importlib
 import signal
 import sys
 import threading
@@ -48,9 +49,14 @@ class IBapi(EWrapper, EClient):
     def openOrder(self, orderId, contract, order, orderState):
         self.bot.record_open_order(orderId, contract, order, orderState)
 
+def load_strategy(name):
+    # A strategy is a file in strategies/ with a class named Strategy
+    return importlib.import_module(f"strategies.{name}").Strategy()
+
 class ForexBot():
-    def __init__(self, symbol="EUR", currency="USD"):
+    def __init__(self, strategy, symbol="EUR", currency="USD"):
         # Define Fields
+        self.strategy = strategy
         self.reqId = 1
         self.orderId = 1
         self.symbol = symbol
@@ -94,22 +100,8 @@ class ForexBot():
 
         self.openOrders = set()
 
-        # MACD Settings
         self.last_ask = None
         self.last_bid = None
-        self.ema_short = None
-        self.ema_long = None
-        self.signal = None
-        self.alpha_short = 2 / (12 + 1)
-        self.alpha_long = 2 / (26 + 1)
-        self.alpha_signal = 2 / (9 + 1)
-
-        # Crossover control
-        self.last_diff = None        # previous (macd - signal)
-        self.last_side = None        # last traded side to prevent repeats
-        self.last_trade_ts = 0.0
-        self.cooldown = 2.0          # minimum seconds between trades
-        self.diff_eps = 1e-5         # deadband to ignore tiny jitters
 
     def connect(self):
         # IB Gateway restarts daily, so keep reconnecting until disconnect() is called
@@ -213,45 +205,13 @@ class ForexBot():
             self.last_ask = price
 
         if self.last_bid is not None and self.last_ask is not None:
-            mid = (self.last_bid + self.last_ask) / 2.0
-            self.last_mid = mid
-            self.update_macd(mid)
+            action = self.strategy.on_tick(self.last_bid, self.last_ask)
             self.last_bid = self.last_ask = None
-
-    def update_macd(self, mid):
-            
-        if self.ema_short is None:
-            self.ema_short = self.ema_long = self.signal = mid
-            self.last_diff = 0.0
-            return
-        
-        # EMA updates
-        self.ema_short = (mid - self.ema_short) * self.alpha_short + self.ema_short
-        self.ema_long  = (mid - self.ema_long)  * self.alpha_long  + self.ema_long
-        macd = self.ema_short - self.ema_long
-        self.signal = (macd - self.signal) * self.alpha_signal + self.signal
-        diff = macd - self.signal
-
-        print(diff)
-
-        # Trade ONLY on zero-cross with deadband and cooldown
-        now = time.time()
-        crossed_up   = self.last_diff <= -self.diff_eps and diff >=  self.diff_eps
-        crossed_down = self.last_diff >=  self.diff_eps and diff <= -self.diff_eps
-
-        if (now - self.last_trade_ts) >= self.cooldown:
-            if crossed_up and self.last_side != "BUY":
-                print(f"MACD cross↑ → BUY | macd={macd:.6f} signal={self.signal:.6f}")
-                self.place_market_order("BUY", self.quantity)
-                self.last_trade_ts = now
-                self.last_side = "BUY"
-            elif crossed_down and self.last_side != "SELL":
-                print(f"MACD cross↓ → SELL | macd={macd:.6f} signal={self.signal:.6f}")
-                self.place_market_order("SELL", self.quantity)
-                self.last_trade_ts = now
-                self.last_side = "SELL"
-
-        self.last_diff = diff
+            # Anything but BUY would be booked as a sell by record_fill, so reject typos here
+            if action in ("BUY", "SELL"):
+                self.place_market_order(action, self.quantity)
+            elif action is not None:
+                print(f"Ignoring invalid signal {action!r} from strategy")
 
     def stop_market_data(self):
         if self.mktReqId is not None:
@@ -405,11 +365,12 @@ if __name__ == "__main__":
     # Makes `kill` run the cleanup in `finally` too
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
-    bot = ForexBot()
+    # Loaded before connecting so a mistyped name fails straight away
+    bot = ForexBot(load_strategy(sys.argv[1] if len(sys.argv) > 1 else "macd"))
     try:
         # print("Get historical data: \n")
         # bot.get_historical_data()
-        # print("Run MACD strategy \n")
+        # print("Run strategy \n")
         # bot.run_strategy()
         # print("Place an order: \n")
         # bot.place_market_order("BUY", 10)
