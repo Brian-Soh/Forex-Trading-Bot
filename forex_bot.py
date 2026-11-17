@@ -53,10 +53,23 @@ def load_strategy(name):
     # A strategy is a file in strategies/ that exports its class as Strategy
     return importlib.import_module(f"strategies.{name}").Strategy()
 
+# IDEALPRO's usual EUR/USD minimum. Below this, IB routes odd lots that often never fill on paper.
+IDEALPRO_MIN_EURUSD = 20000
+
+def launch_settings(argv):
+    # python forex_bot.py [strategy] [port] [quantity]
+    strategy = argv[1] if len(argv) > 1 else "macd"
+    port = int(argv[2]) if len(argv) > 2 else 4002
+    quantity = float(argv[3]) if len(argv) > 3 else IDEALPRO_MIN_EURUSD
+    if quantity <= 0:
+        raise ValueError(f"quantity must be positive, got {quantity}")
+    return strategy, port, quantity
+
 class ForexBot():
-    def __init__(self, strategy, symbol="EUR", currency="USD"):
+    def __init__(self, strategy, symbol="EUR", currency="USD", port=4002, quantity=IDEALPRO_MIN_EURUSD):
         # Define Fields
         self.strategy = strategy
+        self.port = port
         self.reqId = 1
         self.orderId = 1
         self.symbol = symbol
@@ -73,7 +86,7 @@ class ForexBot():
         self.mktReqId = None         # live market data stream, re-requested after a reconnect
 
         # What the bot itself has traded, for P&L and for closing out on shutdown
-        self.quantity = 1
+        self.quantity = quantity
         self.position = 0.0
         self.cash = 0.0
         self.pending = {}            # orderId -> action, until the order fills or is cancelled
@@ -107,7 +120,7 @@ class ForexBot():
         # IB Gateway restarts daily, so keep reconnecting until disconnect() is called
         while not self.stopping.is_set():
             try:
-                self.ib.connect("127.0.0.1", 4002, 1)
+                self.ib.connect("127.0.0.1", self.port, 1)
                 self.ib.run()
             except Exception as e:
                 print(f"IB connection error: {e}")
@@ -366,7 +379,9 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
     # Loaded before connecting so a mistyped name fails straight away
-    bot = ForexBot(load_strategy(sys.argv[1] if len(sys.argv) > 1 else "macd"))
+    strategy_name, port, quantity = launch_settings(sys.argv)
+    # 4002 is IB Gateway paper (EC2). Pass 7497 for TWS paper. Quantity defaults to the IDEALPRO minimum.
+    bot = ForexBot(load_strategy(strategy_name), port=port, quantity=quantity)
     try:
         # print("Get historical data: \n")
         # bot.get_historical_data()
@@ -375,9 +390,9 @@ if __name__ == "__main__":
         # print("Place an order: \n")
         # bot.place_market_order("BUY", 10)
         # print("Running script from 11am EST - 3:30 pm EST")
-        # bot.buy_nyse_hours(1)
-        print("Running script for 24 hours")
-        bot.buy_for_day(1)
+        # bot.buy_nyse_hours(quantity)
+        print(f"Running script for 24 hours; order size {quantity:g} {bot.symbol}")
+        bot.buy_for_day(quantity)
     finally:
         print("Disconnecting from Interactive Brokers")
         bot.disconnect()

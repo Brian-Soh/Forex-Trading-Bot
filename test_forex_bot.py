@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import threading
 
-from forex_bot import ForexBot, IBapi, load_strategy
+from forex_bot import ForexBot, IBapi, IDEALPRO_MIN_EURUSD, launch_settings, load_strategy
 from strategies.macd import MACD
 
 
@@ -99,6 +99,18 @@ def test_load_strategy_finds_strategies_by_file_name():
         raise AssertionError("an unknown strategy name must fail")
 
 
+def test_launch_settings_default_to_fillable_idealpro_size():
+    assert launch_settings(["forex_bot.py"]) == ("macd", 4002, IDEALPRO_MIN_EURUSD)
+    assert launch_settings(["forex_bot.py", "macd", "7497"]) == ("macd", 7497, IDEALPRO_MIN_EURUSD)
+    assert launch_settings(["forex_bot.py", "macd", "7497", "25000"]) == ("macd", 7497, 25000.0)
+    try:
+        launch_settings(["forex_bot.py", "macd", "7497", "0"])
+    except ValueError as e:
+        assert "positive" in str(e)
+    else:
+        raise AssertionError("quantity 0 must fail")
+
+
 if __name__ == "__main__":
     test_fills_track_position_and_pnl()
     test_error_callback_handles_both_ibapi_signatures()
@@ -106,4 +118,5 @@ if __name__ == "__main__":
     test_macd_does_not_trade_on_the_first_move_after_start_up()
     test_bot_turns_strategy_signals_into_orders()
     test_load_strategy_finds_strategies_by_file_name()
+    test_launch_settings_default_to_fillable_idealpro_size()
     print("ok")

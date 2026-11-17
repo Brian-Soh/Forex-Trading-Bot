@@ -22,7 +22,12 @@ class MyStrategy:
 Strategy = MyStrategy
 ```
 
-Run it with `python forex_bot.py my_strategy`. With no name the bot runs `macd`.
+Run it with `python forex_bot.py [strategy] [port] [quantity]`. Defaults are `macd`, IB Gateway paper port `4002`, and `20000` EUR (IDEALPRO's usual EUR/USD minimum). Sizes below that are odd lots and often never fill.
+
+```bash
+python forex_bot.py macd 7497
+python forex_bot.py macd 7497 25000
+```
 
 ## Sample Instance
 Here is a trade log of running the trading bot for 24 hours on the EUR/USD exchange.
