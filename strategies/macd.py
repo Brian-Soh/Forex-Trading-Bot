@@ -1,7 +1,7 @@
 import time
 
 
-class Strategy:
+class MACD:
     """MACD crossover on the mid price, recalculated on every bid/ask tick."""
 
     def __init__(self, short=12, long=26, signal=9, cooldown=2.0, diff_eps=1e-5):
@@ -53,3 +53,6 @@ class Strategy:
         self.side = side
         self.last_trade_ts = now
         return side
+
+
+Strategy = MACD  # the name forex_bot.py loads from every strategy file

@@ -50,7 +50,7 @@ class IBapi(EWrapper, EClient):
         self.bot.record_open_order(orderId, contract, order, orderState)
 
 def load_strategy(name):
-    # A strategy is a file in strategies/ with a class named Strategy
+    # A strategy is a file in strategies/ that exports its class as Strategy
     return importlib.import_module(f"strategies.{name}").Strategy()
 
 class ForexBot():

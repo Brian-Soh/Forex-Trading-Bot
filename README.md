@@ -10,13 +10,16 @@ I tested the perpetuality of the trading bot by deploying it headlessly on an Am
 I implemented a Moving Average Convergence Divergence (MACD) strategy which is recalculated with every new bid-ask tick. I also refactored the bot so strategies are plug and play: each one lives in `strategies/` and returns `"BUY"`, `"SELL"`, or nothing from `on_tick(bid, ask)`. I look forward to running the bot over the span of the next few weeks and record its results. I plan on coming back to this project in the future and implementing more complex strategies related to arbitrage and spread-capture!
 
 ### Adding a strategy
-Each strategy is one file in `strategies/` containing a class named `Strategy`:
+Each strategy is one file in `strategies/` containing a class, which the last line exports as `Strategy`:
 
 ```python
 # strategies/my_strategy.py
-class Strategy:
+class MyStrategy:
     def on_tick(self, bid, ask):
         return None  # or "BUY" / "SELL"
+
+
+Strategy = MyStrategy
 ```
 
 Run it with `python forex_bot.py my_strategy`. With no name the bot runs `macd`.

@@ -6,7 +6,7 @@ from decimal import Decimal
 import threading
 
 from forex_bot import ForexBot, IBapi, load_strategy
-from strategies.macd import Strategy as MACD
+from strategies.macd import MACD
 
 
 def test_fills_track_position_and_pnl():
