@@ -29,6 +29,8 @@ python forex_bot.py macd 7497
 python forex_bot.py macd 7497 25000
 ```
 
+Strategy orders are capped at two full order sizes. The cap uses IB account holdings and working orders for the pair when available, so a position opened by hand in TWS still counts.
+
 ## Sample Instance
 Here is a trade log of running the trading bot for 24 hours on the EUR/USD exchange.
 

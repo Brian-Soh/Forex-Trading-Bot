@@ -49,12 +49,23 @@ class IBapi(EWrapper, EClient):
     def openOrder(self, orderId, contract, order, orderState):
         self.bot.record_open_order(orderId, contract, order, orderState)
 
+    def openOrderEnd(self):
+        self.bot.on_open_order_end()
+
+    def position(self, account, contract, position, avgCost):
+        self.bot.on_position(account, contract, position, avgCost)
+
+    def positionEnd(self):
+        self.bot.on_position_end()
+
 def load_strategy(name):
     # A strategy is a file in strategies/ that exports its class as Strategy
     return importlib.import_module(f"strategies.{name}").Strategy()
 
 # IDEALPRO's usual EUR/USD minimum. Below this, IB routes odd lots that often never fill on paper.
 IDEALPRO_MIN_EURUSD = 20000
+# Strategy orders may not push |position| above this many times the order size (shutdown close-out ignores it)
+MAX_POSITION_ORDERS = 2
 
 def launch_settings(argv):
     # python forex_bot.py [strategy] [port] [quantity]
@@ -87,9 +98,24 @@ class ForexBot():
 
         # What the bot itself has traded, for P&L and for closing out on shutdown
         self.quantity = quantity
+        self.max_position = MAX_POSITION_ORDERS * quantity
         self.position = 0.0
         self.cash = 0.0
         self.pending = {}            # orderId -> action, until the order fills or is cancelled
+        # Account-wide exposure for this contract from IB (None until the first successful refresh)
+        self.account_position = None
+        self.account_open = {}       # orderId -> signed working size
+        self.account_as_of = 0.0
+        self.account_lock = threading.Lock()
+        self.positions_event = threading.Event()
+        self.open_orders_event = threading.Event()
+        self._pos_seen = 0.0
+        self._open_build = {}
+        self._refreshing_orders = False
+
+        # Note start time
+        self.startTime = dt.now().astimezone(pytz.utc)
+        self.fileName = f"./order_logs/OrderLog_{self.startTime.strftime('%Y%m%d-%H:%M:%S')}.csv"
 
         # Connect to IB on init
         self.ib = IBapi(self)
@@ -107,14 +133,13 @@ class ForexBot():
         self.contract.secType = "CASH"
         self.contract.exchange = "IDEALPRO"
 
-        # Note start time
-        self.startTime = dt.now().astimezone(pytz.utc)
-        self.fileName = f"./order_logs/OrderLog_{self.startTime.strftime('%Y%m%d-%H:%M:%S')}.csv"
-
         self.openOrders = set()
 
         self.last_ask = None
         self.last_bid = None
+
+        # Read account holdings before the first strategy order
+        self.refresh_account()
 
     def connect(self):
         # IB Gateway restarts daily, so keep reconnecting until disconnect() is called
@@ -133,6 +158,9 @@ class ForexBot():
         self.connected_event.set()
         # Does nothing on the first connect, restores the stream after a reconnect
         self.subscribe()
+        # Re-read holdings after a reconnect; contract exists only after the first connect finishes
+        if getattr(self, "contract", None) is not None:
+            threading.Thread(target=self.refresh_account, daemon=True).start()
 
     def on_error(self, reqId, code, msg):
         print(f"IB error {code} (id {reqId}): {msg}")
@@ -218,13 +246,100 @@ class ForexBot():
             self.last_ask = price
 
         if self.last_bid is not None and self.last_ask is not None:
-            action = self.strategy.on_tick(self.last_bid, self.last_ask)
+            bid, ask = self.last_bid, self.last_ask
+            action = self.strategy.on_tick(bid, ask)
             self.last_bid = self.last_ask = None
             # Anything but BUY would be booked as a sell by record_fill, so reject typos here
             if action in ("BUY", "SELL"):
-                self.place_market_order(action, self.quantity)
+                if self.blocks_strategy_order(action, self.quantity):
+                    print(f"Skipping {action}: account exposure {self.exposure():g} plus this order "
+                          f"would exceed max {self.max_position:g} {self.symbol}")
+                else:
+                    self.place_market_order(action, self.quantity)
             elif action is not None:
                 print(f"Ignoring invalid signal {action!r} from strategy")
+
+    def same_contract(self, contract):
+        return (getattr(contract, "symbol", None) == self.symbol
+                and getattr(contract, "currency", None) == self.currency
+                and getattr(contract, "secType", None) == "CASH")
+
+    # IB holdings + working orders for this pair; falls back to the bot's own fill count
+    def exposure(self):
+        if self.account_position is not None:
+            base = self.account_position
+            working = sum(self.account_open.values())
+            for orderId, action in self.pending.items():
+                if orderId not in self.account_open:
+                    working += self.quantity if action == "BUY" else -self.quantity
+            return base + working
+        reserved = sum(self.quantity if a == "BUY" else -self.quantity for a in self.pending.values())
+        return self.position + reserved
+
+    # True when a strategy order would push |exposure| past max_position
+    def blocks_strategy_order(self, action, quantity):
+        self.ensure_account_snapshot()
+        signed = quantity if action == "BUY" else -quantity
+        return abs(self.exposure() + signed) > self.max_position + 1e-9
+
+    def ensure_account_snapshot(self, max_age=2.0):
+        if self.account_position is not None and (time.time() - self.account_as_of) < max_age:
+            return True
+        return self.refresh_account()
+
+    def refresh_account(self, timeout=5):
+        ib = getattr(self, "ib", None)
+        if ib is None or not ib.isConnected() or getattr(self, "contract", None) is None:
+            return False
+
+        self._pos_seen = 0.0
+        self.positions_event.clear()
+        try:
+            ib.reqPositions()
+        except Exception as e:
+            print(f"Account position request failed: {e}")
+            return False
+        if not self.positions_event.wait(timeout=timeout):
+            print("Timed out waiting for account positions; using bot fill count for the cap")
+            try:
+                ib.cancelPositions()
+            except Exception:
+                pass
+            return False
+        try:
+            ib.cancelPositions()
+        except Exception:
+            pass
+
+        self._open_build = {}
+        self.open_orders_event.clear()
+        self._refreshing_orders = True
+        try:
+            ib.reqAllOpenOrders()
+            if not self.open_orders_event.wait(timeout=timeout):
+                print("Timed out waiting for open orders; using holdings without working orders")
+            else:
+                with self.account_lock:
+                    self.account_open = dict(self._open_build)
+        finally:
+            self._refreshing_orders = False
+
+        self.account_as_of = time.time()
+        working = sum(self.account_open.values())
+        print(f"Account {self.ticker}: position {self.account_position:g}, "
+              f"working orders {working:g}, max {self.max_position:g}")
+        return True
+
+    def on_position(self, account, contract, position, avgCost):
+        if self.same_contract(contract):
+            self._pos_seen = float(position)
+
+    def on_position_end(self):
+        self.account_position = self._pos_seen
+        self.positions_event.set()
+
+    def on_open_order_end(self):
+        self.open_orders_event.set()
 
     def stop_market_data(self):
         if self.mktReqId is not None:
@@ -291,8 +406,12 @@ class ForexBot():
         # IB repeats final statuses, so pop to count each order once. A cancelled order can be part-filled.
         if status in ("Filled", "Cancelled", "ApiCancelled"):
             action = self.pending.pop(orderId, None)
+            self.account_open.pop(orderId, None)
             if action and filled:
                 self.record_fill(action, float(filled), avgFillPrice)
+                # Keep the account figure in step when IB's next positions refresh has not arrived yet
+                if self.account_position is not None:
+                    self.account_position += float(filled) if action == "BUY" else -float(filled)
 
         if hasattr(self, "cancelOrderTracker"):
             self.cancelOrderTracker(orderId, status)
@@ -304,6 +423,7 @@ class ForexBot():
     def buy_for_day(self, quantity):
         hours = 24
         self.quantity = quantity
+        self.max_position = MAX_POSITION_ORDERS * quantity
 
         self.run_strategy(False)
 
@@ -313,6 +433,7 @@ class ForexBot():
 
     def buy_nyse_hours(self, quantity):
         self.quantity = quantity
+        self.max_position = MAX_POSITION_ORDERS * quantity
         # New York time, so the window stays right when daylight saving changes
         runTime = dt.now(pytz.timezone("America/New_York"))
         endTime = runTime.replace(hour=15, minute=30, second=0, microsecond=0)
@@ -373,6 +494,15 @@ class ForexBot():
 
     def record_open_order(self, orderId, contract, order, orderState):
         self.openOrders.add(orderId)
+        if not self.same_contract(contract):
+            return
+        qty = float(order.totalQuantity)
+        signed = qty if order.action == "BUY" else -qty
+        if self._refreshing_orders:
+            self._open_build[orderId] = signed
+        else:
+            with self.account_lock:
+                self.account_open[orderId] = signed
 
 if __name__ == "__main__":
     # Makes `kill` run the cleanup in `finally` too
@@ -391,7 +521,8 @@ if __name__ == "__main__":
         # bot.place_market_order("BUY", 10)
         # print("Running script from 11am EST - 3:30 pm EST")
         # bot.buy_nyse_hours(quantity)
-        print(f"Running script for 24 hours; order size {quantity:g} {bot.symbol}")
+        print(f"Running script for 24 hours; order size {quantity:g} {bot.symbol}, "
+              f"max position {bot.max_position:g} ({MAX_POSITION_ORDERS} orders)")
         bot.buy_for_day(quantity)
     finally:
         print("Disconnecting from Interactive Brokers")
