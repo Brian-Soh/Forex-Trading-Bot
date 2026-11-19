@@ -10,6 +10,7 @@ from forex_bot import (
     ForexBot, IBapi, IDEALPRO_MIN_EURUSD, MAX_POSITION_ORDERS, launch_settings, load_strategy,
 )
 from strategies.macd import MACD
+from strategies.mean_reversion import MeanReversion
 
 
 def test_fills_track_position_and_pnl():
@@ -54,16 +55,26 @@ def macd_signals(prices, cooldown=0):
 
 
 def test_macd_trades_slow_crosses_once_each():
+    # Half-pip steps: each cross takes several ticks to get through the deadband
     step = 0.00005
-    prices = [1.10 - step * i for i in range(100)]
-    prices += [prices[-1] + step * i for i in range(200)]
-    prices += [prices[-1] - step * i for i in range(200)]
+    prices = [1.10 - step * i for i in range(100)]         # down
+    prices += [prices[-1] + step * i for i in range(200)]  # up
+    prices += [prices[-1] - step * i for i in range(200)]  # down
     assert macd_signals(prices) == ["BUY", "SELL"]
+    # The sell lands inside the cooldown of the buy, so it waits
     assert macd_signals(prices, cooldown=3600) == ["BUY"]
 
 
 def test_macd_does_not_trade_on_the_first_move_after_start_up():
+    # Flat then rising: the MACD has only ever been above the signal line, so nothing crossed
     assert macd_signals([1.10] * 60 + [1.10 + 0.00005 * i for i in range(100)]) == []
+
+
+def test_mean_reversion_buys_dips_and_sells_spikes():
+    mr = MeanReversion(window=20, entry_z=2.0, cooldown=0)
+    # Flat window, spike (SELL), flat again to leave the zone, then dip (BUY)
+    prices = [1.10] * 20 + [1.13] + [1.10] * 25 + [1.07]
+    assert [s for p in prices if (s := mr.on_tick(p, p))] == ["SELL", "BUY"]
 
 
 class Stub:
@@ -91,10 +102,10 @@ def test_bot_turns_strategy_signals_into_orders():
     bot.place_market_order = lambda action, quantity: orders.append((action, quantity))
 
     bot.tick_price(1, 1, 1.10, None)
-    assert bot.strategy.seen == []
+    assert bot.strategy.seen == []  # a bid alone is not a full quote
     bot.tick_price(1, 2, 1.12, None)
     assert bot.strategy.seen == [(1.10, 1.12)]
-    for _ in range(2):
+    for _ in range(2):  # "buy" is not a valid signal and None means no trade
         bot.tick_price(1, 1, 1.10, None)
         bot.tick_price(1, 2, 1.12, None)
     assert orders == [("BUY", 3)]
@@ -121,10 +132,10 @@ def test_strategy_orders_stop_at_two_full_positions():
     for _ in range(3):
         bot.tick_price(1, 1, 1.10, None)
         bot.tick_price(1, 2, 1.12, None)
-    assert orders == [("BUY", 20000), ("BUY", 20000)]
+    assert orders == [("BUY", 20000), ("BUY", 20000)]  # third BUY would be 3× size
 
     bot.pending.clear()
-    bot.position = -40000
+    bot.position = -40000  # already at the short cap
     bot.strategy = Stub(["SELL"])
     bot.tick_price(1, 1, 1.10, None)
     bot.tick_price(1, 2, 1.12, None)
@@ -138,9 +149,9 @@ def test_max_position_uses_ib_account_holdings():
     bot.last_bid = bot.last_ask = None
     bot.quantity = 20000
     bot.max_position = 40000
-    bot.position = 0.0
+    bot.position = 0.0          # bot thinks it is flat
     bot.pending = {}
-    bot.account_position = 40000
+    bot.account_position = 40000  # account already holds 2 full sizes from TWS
     bot.account_open = {}
     bot.account_as_of = time.time()
     bot.symbol = "EUR"
@@ -169,6 +180,7 @@ def test_max_position_uses_ib_account_holdings():
 
 def test_load_strategy_finds_strategies_by_file_name():
     assert isinstance(load_strategy("macd"), MACD)
+    assert isinstance(load_strategy("mean_reversion"), MeanReversion)
     try:
         load_strategy("no_such_strategy")
     except ModuleNotFoundError as e:
@@ -194,6 +206,7 @@ if __name__ == "__main__":
     test_error_callback_handles_both_ibapi_signatures()
     test_macd_trades_slow_crosses_once_each()
     test_macd_does_not_trade_on_the_first_move_after_start_up()
+    test_mean_reversion_buys_dips_and_sells_spikes()
     test_bot_turns_strategy_signals_into_orders()
     test_strategy_orders_stop_at_two_full_positions()
     test_max_position_uses_ib_account_holdings()
