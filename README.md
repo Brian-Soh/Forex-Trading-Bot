@@ -1,42 +1,31 @@
 # Forex Trading Bot
 
 ## Introduction
-In this project I explored the intersection of quantitative finance and software development. I created a trading bot using [Interactive Brokers' (IB) Python API](https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/#api-introduction) to stream real-time, tick-by-tick forex market data and execute orders on a simulated trading account though both their Trader Work Station (TWS) and their headless application, IB Gateway. 
+In this project I explored the intersection of quantitative finance and software development. I created a trading bot using [Interactive Brokers' (IB) Python API](https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/#api-introduction) to stream real-time, tick-by-tick forex market data and execute orders on a simulated trading account through both their Trader Work Station (TWS) and their headless application, IB Gateway.
 
 ## Amazon Web Services
-I tested the perpetuality of the trading bot by deploying it headlessly on an Amazon Web Services (AWS) Elastic Compute Cloud (EC2). The IB Gateway application has many requirements, such as a GUI interface for login and hosting, as well as a daiy reboot. To automatically handle these prerequisites, I created a shell script which creates a X Virtual Frame Buffer to simulate an interface and leverages the [Interactive Brokers Controller (IBC)](https://github.com/IbcAlpha/IBC?tab=readme-ov-file) utility to fill in my credentials. After that, I configured a cron job run the script daily. 
+I tested the perpetuality of the trading bot by deploying it headlessly on an Amazon Web Services (AWS) Elastic Compute Cloud (EC2). The IB Gateway application has many requirements, such as a GUI interface for login and hosting, as well as a daily reboot. To automatically handle these prerequisites, I created a shell script which creates a X Virtual Frame Buffer to simulate an interface and leverages the [Interactive Brokers Controller (IBC)](https://github.com/IbcAlpha/IBC?tab=readme-ov-file) utility to fill in my credentials. After that, I configured a cron job to run the script daily.
 
-## Strategy
-I implemented a Moving Average Convergence Divergence (MACD) strategy which is recalculated with every new bid-ask tick. I also refactored the bot so strategies are plug and play: each one lives in `strategies/` and returns `"BUY"`, `"SELL"`, or nothing from `on_tick(bid, ask)`. I look forward to running the bot over the span of the next few weeks and record its results. I plan on coming back to this project in the future and implementing more complex strategies related to arbitrage and spread-capture!
+## Strategies
+I refactored the bot so that strategies are plug and play. Each strategy lives in its own file under `strategies/` and exposes a class with an `on_tick(bid, ask)` method that returns `"BUY"`, `"SELL"`, or nothing. The engine streams quotes, asks the strategy what to do, and places market orders when it gets a signal. To try a different idea I only need to add a file and pass its name when I launch the bot.
 
-### Adding a strategy
-Each strategy is one file in `strategies/` containing a class, which the last line exports as `Strategy`:
+I currently have two strategies. The first is Moving Average Convergence Divergence (MACD), which recalculates on every bid-ask tick and trades when the MACD line crosses its signal line. It is meant to follow momentum. The second is a mean reversion strategy, which waits for a short window of mid prices and fades moves that stretch too far from that average: buying when price looks unusually low and selling when it looks unusually high. I wanted a second strategy that behaves the opposite of MACD so I could compare trend-following and mean-reverting ideas on the same tick stream.
 
-```python
-# strategies/my_strategy.py
-class MyStrategy:
-    def on_tick(self, bid, ask):
-        return None  # or "BUY" / "SELL"
-
-
-Strategy = MyStrategy
-```
-
-Run it with `python forex_bot.py [strategy] [port] [quantity]`. Defaults are `macd`, IB Gateway paper port `4002`, and `20000` EUR (IDEALPRO's usual EUR/USD minimum). Sizes below that are odd lots and often never fill.
+I launch a strategy like this (port `7497` is TWS paper; `4002` is IB Gateway paper, which my EC2 setup uses):
 
 ```bash
 python forex_bot.py macd 7497
-python forex_bot.py macd 7497 25000
+python forex_bot.py mean_reversion 7497
 ```
 
-Strategy orders are capped at two full order sizes. The cap uses IB account holdings and working orders for the pair when available, so a position opened by hand in TWS still counts.
+By default the bot trades 20000 EUR on EUR/USD, which matches IDEALPRO's usual minimum size so orders are more likely to fill. I also cap open exposure at two full order sizes and check Interactive Brokers for existing holdings on the pair, so a position I opened by hand in TWS still counts toward the limit. I look forward to running both strategies over longer windows and comparing their results. I still plan on coming back to more complex ideas related to arbitrage and spread-capture!
 
 ## Sample Instance
 Here is a trade log of running the trading bot for 24 hours on the EUR/USD exchange.
 
 <img width="353" height="214" alt="image" src="https://github.com/user-attachments/assets/1bd2704d-be77-4329-80c7-8c90a391b005" />
 
-We can now analyze the charts of when the trades occured through TradingView. Evidently, the MACD indicator proved successful in jumping on upward trends in most instances!
+We can now analyze the charts of when the trades occurred through TradingView. Evidently, the MACD indicator proved successful in jumping on upward trends in most instances!
 
 Trade 1:
 <img width="421" height="469" alt="image" src="https://github.com/user-attachments/assets/135248a8-61bf-4bdd-b269-0037c4d8c5eb" />
@@ -49,4 +38,3 @@ Trade 3
 
 Trade 4
 <img width="346" height="469" alt="image" src="https://github.com/user-attachments/assets/71c6c1b2-183d-4d53-8a12-2db5b77bc0c0" />
-
